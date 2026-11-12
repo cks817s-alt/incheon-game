@@ -2262,25 +2262,119 @@ const V3 = (() => {
     for (let py = 0; py < n; py++) for (let px = 0; px < n; px++) { const dx = (hgt(px + 1, py) - hgt(px - 1, py)) * 9, dy = (hgt(px, py + 1) - hgt(px, py - 1)) * 9, l = Math.hypot(dx, dy, 1), i = (py * n + px) * 4; id.data[i] = (-dx / l * 0.5 + 0.5) * 255; id.data[i + 1] = (-dy / l * 0.5 + 0.5) * 255; id.data[i + 2] = (1 / l * 0.5 + 0.5) * 255; id.data[i + 3] = 255; }
     x.putImageData(id, 0, 0); return c;
   })();
-  function sky(top, mid, bot) {
-    const m = new T.ShaderMaterial({ side: T.BackSide, depthWrite: false, fog: false, uniforms: { top: { value: new T.Color(top) }, mid: { value: new T.Color(mid) }, bot: { value: new T.Color(bot) } },
-      vertexShader: 'varying vec3 vP;\nvoid main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-      fragmentShader: 'uniform vec3 top; uniform vec3 mid; uniform vec3 bot; varying vec3 vP;\nvoid main(){ float h = normalize(vP).y; vec3 c = mix(bot, mid, smoothstep(-0.03, 0.08, h)); c = mix(c, top, smoothstep(0.06, 0.62, h)); gl_FragColor = vec4(c, 1.0);\n#include <tonemapping_fragment>\n#include <colorspace_fragment>\n}' });
-    const o = new T.Mesh(new T.SphereGeometry(3000, 24, 12), m); o.renderOrder = -10; return o;
+  /* ----- 하늘: 색 띠 + 해·달 + 흐르는 구름 + 별 (바다 반사에도 같은 식을 씀) ----- */
+  const NOISE = 'float h21(vec2 p){ p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }\nfloat vn(vec2 p){ vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f); return mix(mix(h21(i), h21(i + vec2(1.0, 0.0)), f.x), mix(h21(i + vec2(0.0, 1.0)), h21(i + vec2(1.0, 1.0)), f.x), f.y); }\nfloat fbm(vec2 p){ float a = 0.5, s = 0.0; for (int i = 0; i < 5; i++) { s += a * vn(p); p = p * 2.03 + vec2(17.0, 9.0); a *= 0.5; } return s; }\n';
+  const SKYFN = NOISE + `uniform vec3 sTop; uniform vec3 sMid; uniform vec3 sBot; uniform vec3 sDir; uniform vec3 sCol; uniform vec4 sPar; uniform float sTime;
+vec3 skyBase(vec3 d){ float h = d.y; vec3 c = mix(sBot, sMid, smoothstep(-0.03, 0.08, h)); c = mix(c, sTop, smoothstep(0.06, 0.62, h)); float m = max(dot(d, sDir), 0.0); c += sCol * (pow(m, 6.0) * 0.2 + pow(m, 40.0) * 0.45) * sPar.z; return c; }
+vec3 skyFull(vec3 d){ vec3 c = skyBase(d); float m = max(dot(d, sDir), 0.0);
+  if (sPar.y > 0.0 && d.y > 0.0) { vec2 g = d.xz / (d.y + 0.35) * 90.0; vec2 id = floor(g); float r = h21(id); vec2 f = fract(g) - 0.5 - (vec2(h21(id + 3.1), h21(id + 7.7)) - 0.5) * 0.7; c += vec3(0.8, 0.88, 1.0) * sPar.y * step(0.93, r) * smoothstep(0.09, 0.0, length(f)) * (0.6 + 0.4 * sin(sTime * 2.0 + r * 60.0)) * 1.6; }
+  c += sCol * smoothstep(sPar.w, sPar.w + 0.0006, m) * (3.0 + 11.0 * sPar.z);
+  if (d.y > 0.0 && sPar.x > 0.0) { vec2 uv = d.xz / (d.y + 0.16); float n = fbm(uv * 1.1 + vec2(sTime * 0.012, sTime * 0.005)); float n2 = fbm(uv * 2.7 - vec2(sTime * 0.02, 0.0)); float cov = smoothstep(1.0 - sPar.x, 1.0 - sPar.x + 0.28, n * 0.75 + n2 * 0.25); float lit = pow(m, 3.0); vec3 cc = mix(sTop * 0.4 + sMid * 0.25, sMid * 0.9 + sCol * 0.5, lit) + sCol * pow(m, 14.0) * 1.3 * (1.0 - cov * 0.6); c = mix(c, cc, cov * smoothstep(0.0, 0.16, d.y) * 0.92); }
+  return c; }
+`;
+  function skyU(o) { return { sTop: { value: new T.Color(o.sky[0]) }, sMid: { value: new T.Color(o.sky[1]) }, sBot: { value: new T.Color(o.sky[2]) }, sDir: { value: o.sunDir.clone() }, sCol: { value: new T.Color(o.sun[0]).multiplyScalar(o.glow || 1) }, sPar: { value: new T.Vector4(o.cloud || 0, o.stars || 0, o.halo == null ? 1 : o.halo, Math.cos(o.disc || 0.03)) }, sTime: { value: 0 } }; }
+  function sky(su) {
+    const m = new T.ShaderMaterial({ side: T.BackSide, depthWrite: false, fog: false, uniforms: su, vertexShader: 'varying vec3 vP;\nvoid main(){ vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }', fragmentShader: SKYFN + 'varying vec3 vP;\nvoid main(){ gl_FragColor = vec4(skyFull(normalize(vP)), 1.0); }' });
+    const o = new T.Mesh(new T.SphereGeometry(3000, 32, 16), m); o.renderOrder = -10; return o;
   }
   function spr(col, size, op = 1) { const s = new T.Sprite(new T.SpriteMaterial({ map: glowTex, color: col, blending: T.AdditiveBlending, depthWrite: false, transparent: true, opacity: op, fog: false })); s.scale.set(size, size, 1); return s; }
-  function water(col, spec, shin, op) {
-    const tex = new T.CanvasTexture(normTex); tex.wrapS = tex.wrapT = T.RepeatWrapping; tex.repeat.set(230, 230);
-    const g = new T.PlaneGeometry(3600, 3600); g.rotateX(-Math.PI / 2);
-    const o = new T.Mesh(g, new T.MeshPhongMaterial({ color: col, specular: spec, shininess: shin, normalMap: tex, normalScale: new T.Vector2(0.42, 0.42), transparent: op < 1, opacity: op }));
-    o.receiveShadow = true; o.userData.tex = tex; return o;
+
+  /* ----- 바다: 여러 파도를 더해 실제로 출렁이고(배도 같은 식으로 흔들림), 하늘을 비추며, 물비늘과 포말이 생김 ----- */
+  const WV = [[0.0, 46, 0.42], [0.55, 29, 0.26], [-0.6, 17, 0.15], [1.25, 11, 0.09], [-1.4, 6.5, 0.05]];   // 방향·파장·높이
+  function ocean(o) {
+    const ws = WV.map(([a, L, A], i) => { const k = TAU / L, an = (o.wind || 0) + a; return [Math.cos(an) * k, Math.sin(an) * k, A, Math.sqrt(9.8 * k) * 0.55, i * 1.7]; });
+    const N = lowQ ? 150 : 230, R0 = 1500, pos = new Float32Array((N + 1) * (N + 1) * 3), idx = [], f = u => R0 * (0.035 * u + 0.965 * u * Math.pow(Math.abs(u), 1.9));
+    for (let j = 0; j <= N; j++) for (let i = 0; i <= N; i++) { const n = (j * (N + 1) + i) * 3; pos[n] = f(i / N * 2 - 1); pos[n + 2] = f(j / N * 2 - 1); }
+    for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { const a = j * (N + 1) + i, b = a + 1, d = a + N + 1, e = d + 1; idx.push(a, d, b, b, d, e); }
+    const g = new T.BufferGeometry(); g.setAttribute('position', new T.BufferAttribute(pos, 3)); g.setIndex(idx);
+    const tex = new T.CanvasTexture(normTex); tex.wrapS = tex.wrapT = T.RepeatWrapping;
+    const sh = o.shore || [0, 1, 0, 0], u = Object.assign({ uT: { value: 0 }, uC: { value: new T.Vector2() }, uLv: { value: 0 }, uAmp: { value: o.amp }, uW: { value: ws.map(w => new T.Vector4(w[0], w[1], w[2], w[3])) }, uPh: { value: ws.map(w => w[4]) },
+      uDeep: { value: new T.Color(o.deep) }, uShal: { value: new T.Color(o.shal) }, uFog: { value: new T.Color(o.fog) }, uFogD: { value: o.fogD }, uShore: { value: new T.Vector4(sh[0], sh[1], sh[2], sh[3]) }, uAlpha: { value: o.alpha == null ? 1 : o.alpha }, uNorm: { value: tex },
+      uLP: { value: [0, 1, 2, 3].map(() => new T.Vector4(0, -999, 0, 1)) }, uLC: { value: [0, 1, 2, 3].map(() => new T.Color(0)) }, uBA: { value: new T.Vector4(0, 0, 0, 2) }, uBD: { value: new T.Vector3(0, -1, 0) }, uBC: { value: new T.Color(0) }, uFoam: { value: o.foam == null ? 0.6 : o.foam }, uFoamC: { value: o.foamC == null ? 1 : o.foamC } }, o.su);
+    const HEAD = 'uniform float uT; uniform vec2 uC; uniform float uLv; uniform float uAmp; uniform vec4 uW[5]; uniform float uPh[5]; uniform vec4 uShore;\nvarying vec3 vP; varying float vH; varying float vDp;\nfloat depthAt(vec2 p){ if (uShore.x > 0.5 && uShore.x < 1.5) { float g = p.y >= 0.0 ? -p.y / uShore.y * 2.5 : min(2.0, -p.y * 0.42); return uLv - g; } if (uShore.x > 1.5) return -p.x * 0.6; return 50.0; }\n';
+    const m = new T.ShaderMaterial({ uniforms: u, transparent: (o.alpha == null ? 1 : o.alpha) < 1, fog: false,
+      vertexShader: HEAD + 'void main(){ vec2 p = position.xz + uC; float dp = depthAt(p); float at = uAmp * smoothstep(0.0, 2.2, dp); float h = 0.0; for (int i = 0; i < 5; i++) h += uW[i].z * sin(dot(uW[i].xy, p) + uW[i].w * uT + uPh[i]); vH = h; vDp = dp; vP = vec3(p.x, uLv + h * at, p.y); gl_Position = projectionMatrix * viewMatrix * vec4(vP, 1.0); }',
+      fragmentShader: HEAD + SKYFN + `uniform vec3 uDeep; uniform vec3 uShal; uniform vec3 uFog; uniform float uFogD; uniform float uAlpha; uniform sampler2D uNorm; uniform vec4 uLP[4]; uniform vec3 uLC[4]; uniform vec4 uBA; uniform vec3 uBD; uniform vec3 uBC; uniform float uFoam; uniform float uFoamC;
+void main(){
+  vec2 p = vP.xz; float at = uAmp * smoothstep(0.0, 2.2, vDp);
+  vec2 g = vec2(0.0); for (int i = 0; i < 5; i++) g += uW[i].xy * (uW[i].z * cos(dot(uW[i].xy, p) + uW[i].w * uT + uPh[i]));
+  vec3 d1 = texture2D(uNorm, p * 0.031 + vec2(uT * 0.011, uT * 0.017)).xyz * 2.0 - 1.0; vec3 d2 = texture2D(uNorm, p * 0.093 - vec2(uT * 0.02, -uT * 0.013)).xyz * 2.0 - 1.0;
+  vec3 N = normalize(vec3(-g.x * at - (d1.x + d2.x * 0.6) * 0.15, 1.0, -g.y * at - (d1.y + d2.y * 0.6) * 0.15));
+  vec3 V = cameraPosition - vP; float dist = length(V); V /= dist;
+  float fr = 0.03 + 0.97 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
+  vec3 Rr = reflect(-V, N); Rr.y = abs(Rr.y) + 0.02; Rr = normalize(Rr);
+  vec3 body = mix(uDeep, uShal, clamp(vH * 0.9 + 0.35, 0.0, 1.0) * 0.5 + (1.0 - smoothstep(0.0, 3.0, vDp)) * 0.6);
+  vec3 col = mix(body, skyBase(Rr), fr);
+  float sd = max(dot(Rr, sDir), 0.0); col += sCol * (pow(sd, 260.0) * 10.0 + pow(sd, 28.0) * 0.28);
+  for (int i = 0; i < 4; i++) { vec3 L = uLP[i].xyz - vP; float d = length(L); float a = clamp(1.0 - d / uLP[i].w, 0.0, 1.0); a *= a; vec3 Ln = L / max(d, 0.001); col += uLC[i] * a * (max(dot(N, Ln), 0.0) * (body * 2.0 + 0.05) + pow(max(dot(Rr, Ln), 0.0), 90.0) * 2.5); }
+  { vec3 q = vP - uBA.xyz; float d = length(q); float c = dot(q / max(d, 0.001), uBD); float lit = smoothstep(uBA.w, mix(uBA.w, 1.0, 0.45), c); col += uBC * lit * (0.05 + 0.3 * max(d1.x + d2.y, 0.0)); }
+  float fm = smoothstep(uFoam, uFoam + 0.45, vH + (d1.x + d2.y) * 0.22) * clamp(at / max(uAmp, 0.001), 0.0, 1.0);
+  fm = max(fm, (1.0 - smoothstep(0.0, 0.55, vDp)) * (0.55 + 0.45 * sin(vDp * 9.0 - uT * 2.0 + d1.x * 3.0)));
+  fm = clamp(fm, 0.0, 1.0);
+  col = mix(col, vec3(0.9, 0.95, 1.0) * uFoamC, fm * 0.85);
+  col = mix(col, uFog, 1.0 - exp(-pow(dist * uFogD, 2.0)));
+  float al = uAlpha < 1.0 ? mix(uAlpha * 0.5, 1.0, smoothstep(0.0, 1.7, vDp)) : 1.0;
+  gl_FragColor = vec4(col, max(al, fm));
+}` });
+    const mesh = new T.Mesh(g, m); mesh.frustumCulled = false; mesh.renderOrder = 1;
+    const dep = (x, z, lv) => sh[0] === 1 ? lv - (z >= 0 ? -z / sh[1] * 2.5 : Math.min(2, -z * 0.42)) : sh[0] === 2 ? -x * 0.6 : 50;
+    let T0 = 0, LV = 0;
+    return { mesh,
+      tick(t, cx, cz, lv) { T0 = t; LV = lv; u.uT.value = t; u.uC.value.set(Math.round(cx / 4) * 4, Math.round(cz / 4) * 4); u.uLv.value = lv; },
+      h(x, z) { let h = 0; for (const w of ws) h += w[2] * Math.sin(w[0] * x + w[1] * z + w[3] * T0 + w[4]); return LV + h * o.amp * clamp(dep(x, z, LV) / 2.2, 0, 1); },
+      light(i, x, y, z, r, col, k) { u.uLP.value[i].set(x, y, z, Math.max(1, r)); u.uLC.value[i].set(col).multiplyScalar(k); },
+      beam(apex, to, col, k, cosO) { u.uBA.value.set(apex.x, apex.y, apex.z, cosO); u.uBD.value.copy(to).sub(apex).normalize(); u.uBC.value.set(col).multiplyScalar(k); } };
   }
+
+  /* ----- 후처리: 밝은 빛 번짐(블룸) → 색 보정 → 붓질 느낌(쿠와하라 필터) ----- */
+  const post = (() => {
+    const q = new T.Mesh(new T.PlaneGeometry(2, 2)), qs = new T.Scene(), qc = new T.OrthographicCamera(-1, 1, 1, -1, 0, 1); q.frustumCulled = false; qs.add(q);
+    const VS = 'varying vec2 vUv;\nvoid main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
+    const mk = (fs, u, add) => new T.ShaderMaterial({ vertexShader: VS, fragmentShader: fs, uniforms: u, depthTest: false, depthWrite: false, toneMapped: false, blending: add ? T.AdditiveBlending : T.NoBlending, transparent: !!add });
+    const hf = R.capabilities.isWebGL2 && (R.extensions.has('EXT_color_buffer_float') || R.extensions.has('EXT_color_buffer_half_float'));
+    const TAP = 'vec3 tap4(sampler2D t, vec2 uv, vec2 px){ return (texture2D(t, uv + px * vec2(-1.0, -1.0)).rgb + texture2D(t, uv + px * vec2(1.0, -1.0)).rgb + texture2D(t, uv + px * vec2(-1.0, 1.0)).rgb + texture2D(t, uv + px * vec2(1.0, 1.0)).rgb) * 0.25; }\n';
+    const mBright = mk('uniform sampler2D tD; uniform vec2 px; uniform float th; varying vec2 vUv;\n' + TAP + 'void main(){ vec3 c = min(tap4(tD, vUv, px), vec3(24.0)); float l = max(c.r, max(c.g, c.b)); gl_FragColor = vec4(c * smoothstep(th, th * 2.2, l), 1.0); }', { tD: { value: null }, px: { value: new T.Vector2() }, th: { value: 1 } });
+    const mDown = mk('uniform sampler2D tD; uniform vec2 px; varying vec2 vUv;\n' + TAP + 'void main(){ gl_FragColor = vec4(tap4(tD, vUv, px), 1.0); }', { tD: { value: null }, px: { value: new T.Vector2() } });
+    const mUp = mk('uniform sampler2D tD; uniform vec2 px; varying vec2 vUv;\n' + TAP + 'void main(){ gl_FragColor = vec4((tap4(tD, vUv, px) + tap4(tD, vUv, px * 2.0)) * 0.5, 1.0); }', { tD: { value: null }, px: { value: new T.Vector2() } }, true);
+    const mComp = mk(`uniform sampler2D tD; uniform sampler2D tB; uniform float ex; uniform float bs; uniform float tm; uniform float vg; uniform float time; varying vec2 vUv;
+vec3 aces(vec3 x){ return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0); }
+void main(){ vec3 c = texture2D(tD, vUv).rgb + texture2D(tB, vUv).rgb * bs; c *= ex; if (tm > 0.5) c = aces(c); else c = clamp(c, 0.0, 1.0);
+  float l = dot(c, vec3(0.2126, 0.7152, 0.0722)); c = mix(vec3(l), c, 1.0 + 0.1 * tm); c = mix(c, c * c * (3.0 - 2.0 * c), 0.22 * tm);
+  vec2 q = vUv - 0.5; c *= 1.0 - vg * dot(q, q) * 1.5;
+  c = pow(max(c, 0.0), vec3(1.0 / 2.2)); c += (fract(sin(dot(gl_FragCoord.xy + time, vec2(12.9898, 78.233))) * 43758.5453) - 0.5) / 255.0;
+  gl_FragColor = vec4(c, 1.0); }`, { tD: { value: null }, tB: { value: null }, ex: { value: 1 }, bs: { value: 1 }, tm: { value: 1 }, vg: { value: 0.5 }, time: { value: 0 } });
+    const mKuwa = mk(`uniform sampler2D tD; uniform vec2 px; uniform float mixk; varying vec2 vUv;
+void main(){ vec3 m0 = vec3(0.0), m1 = vec3(0.0), m2 = vec3(0.0), m3 = vec3(0.0), s0 = vec3(0.0), s1 = vec3(0.0), s2 = vec3(0.0), s3 = vec3(0.0);
+  for (int j = -2; j <= 2; j++) for (int i = -2; i <= 2; i++) { vec3 c = texture2D(tD, vUv + vec2(float(i), float(j)) * px).rgb; vec3 cc = c * c;
+    if (i <= 0 && j <= 0) { m0 += c; s0 += cc; } if (i >= 0 && j <= 0) { m1 += c; s1 += cc; } if (i <= 0 && j >= 0) { m2 += c; s2 += cc; } if (i >= 0 && j >= 0) { m3 += c; s3 += cc; } }
+  m0 /= 9.0; m1 /= 9.0; m2 /= 9.0; m3 /= 9.0; vec3 v;
+  v = abs(s0 / 9.0 - m0 * m0); float b = v.r + v.g + v.b; vec3 o = m0;
+  v = abs(s1 / 9.0 - m1 * m1); float e = v.r + v.g + v.b; if (e < b) { b = e; o = m1; }
+  v = abs(s2 / 9.0 - m2 * m2); e = v.r + v.g + v.b; if (e < b) { b = e; o = m2; }
+  v = abs(s3 / 9.0 - m3 * m3); e = v.r + v.g + v.b; if (e < b) { b = e; o = m3; }
+  gl_FragColor = vec4(mix(texture2D(tD, vUv).rgb, o, mixk), 1.0); }`, { tD: { value: null }, px: { value: new T.Vector2() }, mixk: { value: 0.7 } });
+    let rt = null, ld = null, bl = [], w = 0, h = 0, ms = -1; const sz = new T.Vector2();
+    const pass = (m, to) => { q.material = m; R.setRenderTarget(to); R.render(qs, qc); };
+    return { render(scene, camera, o) {
+      R.getDrawingBufferSize(sz); const sm = lowQ ? 0 : 4;
+      if (sz.x !== w || sz.y !== h || sm !== ms) { w = sz.x; h = sz.y; ms = sm; for (const t of [rt, ld, ...bl]) if (t) t.dispose();
+        rt = new T.WebGLRenderTarget(w, h, { type: hf ? T.HalfFloatType : T.UnsignedByteType, samples: sm }); ld = new T.WebGLRenderTarget(w, h, { depthBuffer: false });
+        bl = []; for (let i = 0; i < 5; i++) bl.push(new T.WebGLRenderTarget(Math.max(2, w >> (i + 1)), Math.max(2, h >> (i + 1)), { type: hf ? T.HalfFloatType : T.UnsignedByteType, depthBuffer: false })); }
+      R.toneMapping = T.NoToneMapping; R.setRenderTarget(rt); R.render(scene, camera);
+      mBright.uniforms.tD.value = rt.texture; mBright.uniforms.px.value.set(0.5 / w, 0.5 / h); mBright.uniforms.th.value = o.th; pass(mBright, bl[0]);
+      for (let i = 1; i < 5; i++) { mDown.uniforms.tD.value = bl[i - 1].texture; mDown.uniforms.px.value.set(1 / bl[i - 1].width, 1 / bl[i - 1].height); pass(mDown, bl[i]); }
+      R.autoClear = false; for (let i = 4; i >= 1; i--) { mUp.uniforms.tD.value = bl[i].texture; mUp.uniforms.px.value.set(1 / bl[i].width, 1 / bl[i].height); pass(mUp, bl[i - 1]); } R.autoClear = true;
+      const cu = mComp.uniforms; cu.tD.value = rt.texture; cu.tB.value = bl[0].texture; cu.ex.value = o.ex; cu.bs.value = o.bs; cu.tm.value = o.tm; cu.vg.value = o.vg; cu.time.value = o.t % 10;
+      if (o.paint) { pass(mComp, ld); mKuwa.uniforms.tD.value = ld.texture; mKuwa.uniforms.px.value.set(1.35 / w * (h / 900), 1.35 / 900); mKuwa.uniforms.mixk.value = o.paint; pass(mKuwa, null); } else pass(mComp, null);
+      R.setRenderTarget(null);
+    } };
+  })();
   function points(add) {
     const N = 1100, g = new T.BufferGeometry();
     g.setAttribute('position', new T.BufferAttribute(new Float32Array(N * 3), 3)); g.setAttribute('col', new T.BufferAttribute(new Float32Array(N * 4), 4)); g.setAttribute('size', new T.BufferAttribute(new Float32Array(N), 1));
     const m = new T.ShaderMaterial({ transparent: true, depthWrite: false, blending: add ? T.AdditiveBlending : T.NormalBlending, uniforms: { sc: { value: 500 } },
       vertexShader: 'attribute float size; attribute vec4 col; varying vec4 vC; uniform float sc;\nvoid main(){ vC = col; vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = projectionMatrix * mv; gl_PointSize = min(700.0, size * sc / max(0.1, -mv.z)); }',
-      fragmentShader: 'varying vec4 vC;\nvoid main(){ float d = length(gl_PointCoord - 0.5) * 2.0; float a = smoothstep(1.0, 0.1, d); gl_FragColor = vec4(vC.rgb, vC.a * a); }' });
+      fragmentShader: 'varying vec4 vC;\nvoid main(){ float d = length(gl_PointCoord - 0.5) * 2.0; float a = smoothstep(1.0, 0.1, d); gl_FragColor = vec4(pow(vC.rgb, vec3(2.2)) * ' + (add ? '2.6' : '1.0') + ', vC.a * a); }' });
     const o = new T.Points(g, m); o.frustumCulled = false; o.renderOrder = add ? 6 : 5; o.n = 0; o.N = N; return o;
   }
   function put(P, x, y, z, size, r, g, b, a) { if (P.n >= P.N || a <= 0.004) return; const i = P.n++, ge = P.geometry; ge.attributes.position.setXYZ(i, x, y, z); ge.attributes.col.setXYZW(i, r / 255, g / 255, b / 255, a); ge.attributes.size.setX(i, size); }
@@ -2299,7 +2393,7 @@ const V3 = (() => {
     const guns = [];
     for (const [x, y] of [[3.6, 1.05], [2.6, 1.5], [-3.6, 1.05], [-2.7, 1.5]]) { const t = new T.Group(); t.position.set(x, y, 0); t.add(box(0.95, 0.5, 0.85, deckM, 0, 0.25, 0)); const b = cyl(0.07, 0.08, 1.5, dk, (x > 0 ? 1 : -1) * 0.95, 0.32, 0, 6); b.rotation.z = Math.PI / 2; t.add(b); g.add(t); guns.push(t); }
     g.add(box(1.2, 0.5, 1.2, deckM, -2.0, 1.3, 0));
-    const lm = c => new T.Mesh(new T.SphereGeometry(0.09, 6, 5), new T.MeshBasicMaterial({ color: c, fog: false }));
+    const lm = c => { const o = new T.Mesh(new T.SphereGeometry(0.09, 6, 5), new T.MeshBasicMaterial({ color: c, fog: false })); o.material.color.multiplyScalar(4); return o; };
     const l1 = lm(0xff5a4a); l1.position.set(1.2, 2.9, 0.75); const l2 = lm(0x6dff9c); l2.position.set(1.2, 2.9, -0.75); const l3 = lm(0xfff2c0); l3.position.set(0.8, 5.2, 0); g.add(l1, l2, l3);
     g.scale.setScalar(scale); g.userData.guns = guns; return g;
   }
@@ -2353,13 +2447,13 @@ const V3 = (() => {
   }
   function baseScene(o) {
     const sc = new T.Scene(), far = new T.Group(); sc.fog = new T.FogExp2(o.fog, o.fogD);
-    far.add(sky(o.sky[0], o.sky[1], o.sky[2])); sc.add(far);
+    const su = skyU(o); far.add(sky(su)); sc.add(far);
     sc.add(new T.HemisphereLight(o.hemi[0], o.hemi[1], o.hemi[2]));
     const sun = new T.DirectionalLight(o.sun[0], o.sun[1]); sun.position.copy(o.sunDir).multiplyScalar(220); sc.add(sun); sc.add(sun.target);
     if (o.shadow && !lowQ) { sun.castShadow = true; const c = sun.shadow.camera; c.left = -o.shadow; c.right = o.shadow; c.top = o.shadow; c.bottom = -o.shadow; c.near = 10; c.far = 600; sun.shadow.mapSize.set(2048, 2048); sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.04; }
     const pa = points(false), pb = points(true); sc.add(pa, pb);
     const fl = []; for (let i = 0; i < 3; i++) { const l = new T.PointLight(0xffb060, 0, 120, 0); sc.add(l); fl.push(l); }
-    return { scene: sc, far, sun, pa, pb, fl, req: [], exposure: o.exp || 1, tone: T.ACESFilmicToneMapping };
+    return { scene: sc, far, sun, pa, pb, fl, req: [], exposure: o.exp || 1, su, oc: p => ocean(Object.assign({ su, fog: o.fog, fogD: o.fogD }, p)) };
   }
   const proj = (v, out) => { out.copy(v).project(cam); return [(out.x * 0.5 + 0.5) * W, (-out.y * 0.5 + 0.5) * H, out.z]; };
   const ray = new T.Raycaster(), nd = new T.Vector2(), pl = new T.Plane();
@@ -2370,10 +2464,8 @@ const V3 = (() => {
   /* ================= 1단계: 밤의 비어수도 · 팔미도 등대 ================= */
   function s1() {
     const k = K(), s = G.s1, HK = H * k, cxw = w => (S1.cx(w) - W / 2) * k, hww = w => S1.hw(w) * k;
-    const C = baseScene({ fog: 0x0b1a2c, fogD: 0.0042, sky: [0x040914, 0x10263e, 0x0b1c2e], hemi: [0x7696cc, 0x0a121c, 0.9], sun: [0xa9c2ff, 1.25], sunDir: V(-0.45, 1, -0.6).normalize(), exp: 1.25 }), sc = C.scene;
-    { const n = 520, p = new Float32Array(n * 3); for (let i = 0; i < n; i++) { const a = hash(i) * TAU, e = 0.06 + hash(i + 900) * 1.35; p[i * 3] = 2600 * Math.cos(e) * Math.cos(a); p[i * 3 + 1] = 2600 * Math.sin(e); p[i * 3 + 2] = 2600 * Math.cos(e) * Math.sin(a); } const g = new T.BufferGeometry(); g.setAttribute('position', new T.BufferAttribute(p, 3)); C.far.add(new T.Points(g, new T.PointsMaterial({ color: 0xd5e3ff, size: 2.1, sizeAttenuation: false, fog: false, transparent: true, opacity: 0.85 }))); }
-    const moon = spr(0xe6eeff, 330, 0.95); moon.position.set(-900, 760, -2200); C.far.add(moon); const moon2 = spr(0xffffff, 110, 1); moon2.position.copy(moon.position); C.far.add(moon2);
-    const sea = water(0x12375a, 0x4a6488, 46, 1); sea.material.normalScale.set(0.28, 0.28); sea.position.set(0, 0, -HK * 4); sc.add(sea);
+    const C = baseScene({ fog: 0x0b1a2c, fogD: 0.0042, sky: [0x040914, 0x10263e, 0x0b1c2e], hemi: [0x7696cc, 0x0a121c, 0.9], sun: [0xa9c2ff, 1.25], sunDir: V(-0.42, 0.36, -0.83).normalize(), exp: 0.9, cloud: 0.44, stars: 1, disc: 0.017, glow: 0.5, halo: 0.12 }), sc = C.scene;
+    const sea = C.sea = C.oc({ deep: 0x051626, shal: 0x1a5672, amp: 1.0, wind: 1.9, foam: 0.66, foamC: 0.32 }); sc.add(sea.mesh);
     // 양쪽 갯벌과 섬
     const OFF = [0, 1.2, 3.5, 9, 20, 44, 120], HT = [-0.9, 0.3, 1.0, 2.4, 4.8, 7.6, 6], BC = [0x55492f, 0x4c4230, 0x3a3b2a, 0x2a3822, 0x1f2c1b, 0x1a261b, 0x151f17].map(c => new T.Color(c));
     const bankH = off => { for (let j = 1; j < OFF.length; j++) if (off <= OFF[j]) return HT[j - 1] + (HT[j] - HT[j - 1]) * (off - OFF[j - 1]) / (OFF[j] - OFF[j - 1]); return HT[6]; };
@@ -2389,22 +2481,22 @@ const V3 = (() => {
       const x = cxw(r.w) + r.f * hww(r.w), z = -r.w * HK, m = mesh(g, M(0x3b3833), x, -0.15, z); sc.add(m);
       const rg = new T.RingGeometry(rad * 1.05, rad * 1.5, 22); rg.rotateX(-Math.PI / 2); const ring = new T.Mesh(rg, new T.MeshBasicMaterial({ color: 0xdcefff, transparent: true, opacity: 0.3, depthWrite: false })); ring.position.set(x, 0.06, z); sc.add(ring); return { r, ring }; });
     // 부표
-    const buoys = s.buoys.map(b => { const g = new T.Group(), c = b.red ? 0xd63a2a : 0x2ea85a, lc = b.red ? 0xff6a55 : 0x6dffa0; g.add(cyl(0.75, 0.8, 0.4, M(c), 0, 0.1, 0, 10)); g.add(mesh(new T.ConeGeometry(0.6, 1.9, 8), M(c), 0, 1.2, 0)); const lamp = new T.Mesh(new T.SphereGeometry(0.22, 8, 6), new T.MeshBasicMaterial({ color: lc, fog: false })); lamp.position.y = 2.25; g.add(lamp); const gl2 = spr(lc, 7, 0.9); gl2.position.y = 2.25; g.add(gl2); g.position.set(cxw(b.w) + b.f * hww(b.w), 0, -b.w * HK); sc.add(g); return { b, g, lamp, glow: gl2 }; });
+    const buoys = s.buoys.map(b => { const g = new T.Group(), c = b.red ? 0xd63a2a : 0x2ea85a, lc = b.red ? 0xff6a55 : 0x6dffa0; g.add(cyl(0.75, 0.8, 0.4, M(c), 0, 0.1, 0, 10)); g.add(mesh(new T.ConeGeometry(0.6, 1.9, 8), M(c), 0, 1.2, 0)); const lamp = new T.Mesh(new T.SphereGeometry(0.22, 8, 6), new T.MeshBasicMaterial({ color: lc, fog: false })); lamp.material.color.multiplyScalar(5); lamp.position.y = 2.25; g.add(lamp); const gl2 = spr(lc, 7, 0.9); gl2.position.y = 2.25; g.add(gl2); g.position.set(cxw(b.w) + b.f * hww(b.w), 0, -b.w * HK); sc.add(g); return { b, g, lamp, glow: gl2 }; });
     // 팔미도와 등대
     const lw = S1.LEN + 0.42, LX = (S1.cx(lw) + S1.hw(lw) + 60 * U - W / 2) * k, LZ = -lw * HK, LY = 10.6, Lp = V(LX, LY, LZ);
     { const isl = mesh(new T.SphereGeometry(13, 14, 8), M(0x2a3b22), LX, -0.6, LZ); isl.scale.set(1, 0.42, 0.78); sc.add(isl); const sk = cyl(14.5, 17, 1.4, M(0x55492f), LX, -0.35, LZ, 18); sk.scale.z = 0.78; sc.add(sk);
       const L = []; for (let i = 0; i < 46; i++) { const a = hash(i + 300) * TAU, d = 3.5 + hash(i + 340) * 7.5; L.push([LX + Math.cos(a) * d, 4.6 - d * d * 0.045, LZ + Math.sin(a) * d * 0.75, 0.7 + hash(i + 380) * 0.6]); } sc.add(trees(L, 0x1f3320, 0x2d4a28));
       sc.add(cyl(0.75, 1.0, 5.2, M(0xe9e4d6, { flatShading: false }), LX, 7.3, LZ, 12)); sc.add(cyl(1.15, 1.15, 0.25, M(0x2b2b2b), LX, 9.95, LZ, 12)); sc.add(mesh(new T.ConeGeometry(0.85, 0.75, 10), M(0x2b2b2b), LX, 11.45, LZ)); }
     const lanM = new T.MeshStandardMaterial({ color: 0x55554a, emissive: 0xfff1a8, emissiveIntensity: 0, roughness: 0.5 }), lantern = cyl(0.6, 0.6, 0.9, lanM, LX, 10.55, LZ, 10); sc.add(lantern);
-    const lGlow = spr(0xfff0b4, 46, 0); lGlow.position.copy(Lp); sc.add(lGlow);
-    const beam = beamCone(900, 0.04, 0xfff0b4, 0.07); beam.position.copy(Lp); beam.visible = false; sc.add(beam);
-    const beam2 = beamCone(900, 0.012, 0xfff6d0, 0.2); beam2.position.copy(Lp); beam2.visible = false; sc.add(beam2);
+    const lGlow = spr(0xfff0b4, 13, 0); lGlow.position.copy(Lp); sc.add(lGlow);
+    const beam = beamCone(900, 0.04, 0xfff0b4, 0.016); beam.position.copy(Lp); beam.visible = false; sc.add(beam);
+    const beam2 = beamCone(900, 0.012, 0xfff6d0, 0.07); beam2.position.copy(Lp); beam2.visible = false; sc.add(beam2);
     const spot = new T.SpotLight(0xfff0b4, 0, 900, 0.14, 0.7, 0); spot.position.copy(Lp); sc.add(spot, spot.target);
     // 함대
     const flag = ship(1.2), fol = [1, 2, 3].map(() => ship(0.85)); const wk = [flag, ...fol].map((o, i) => { const w = wake(i ? 22 : 30, i ? 6 : 8); w.position.x = -4.5; o.add(w); sc.add(o); return w; });
     const sl = new T.SpotLight(0xcfe2ff, 0, 95, 0.36, 0.8, 0); sl.position.set(4.5, 2.8, 0); const slt = new T.Object3D(); slt.position.set(48, 0, 0); flag.add(sl, slt); sl.target = slt;
-    const sweep = new T.SpotLight(0xdcebff, 0, 320, 0.075, 0.6, 0), sweepT = new T.Object3D(), sweepB = beamCone(300, 0.05, 0xdcebff, 0.05); sc.add(sweep, sweepT, sweepB); sweep.target = sweepT;
-    const flares = [0, 1, 2].map(() => { const l = new T.PointLight(0xfff2d8, 0, 190, 0), g2 = spr(0xfff4dc, 44, 0), ch = mesh(new T.SphereGeometry(1.5, 8, 5, 0, TAU, 0, Math.PI / 2), M(0xe6e6da)); ch.visible = false; sc.add(l, g2, ch); return { l, g: g2, ch }; });
+    const sweep = new T.SpotLight(0xdcebff, 0, 320, 0.075, 0.6, 0), sweepT = new T.Object3D(), sweepB = beamCone(300, 0.05, 0xdcebff, 0.014); sc.add(sweep, sweepT, sweepB); sweep.target = sweepT;
+    const flares = [0, 1, 2].map(() => { const l = new T.PointLight(0xfff2d8, 0, 190, 0), g2 = spr(0xfff4dc, 15, 0), ch = mesh(new T.SphereGeometry(1.5, 8, 5, 0, TAU, 0, Math.PI / 2), M(0xe6e6da)); ch.visible = false; sc.add(l, g2, ch); return { l, g: g2, ch }; });
     const docG = spr(0xffe08a, 9, 0); sc.add(docG);
     let cb = 0; const pA = V(), pB = V(), lA = V(), lB = V();
     C.planar = true;
@@ -2415,15 +2507,16 @@ const V3 = (() => {
       flag.position.set(sX, Math.sin(t * 1.7) * 0.12, sZ); flag.rotation.set(Math.sin(t * 1.3) * 0.03 + tilt * 0.25, Math.PI / 2 - tilt * 0.9, Math.sin(t * 1.9) * 0.015);
       fol.forEach((o, i) => { const w2 = s.w - 0.2 * (i + 1); o.position.set((S1.followerX(w2) - W / 2) * k, Math.sin(t * 1.6 + i * 2) * 0.1, -w2 * HK); o.rotation.set(Math.sin(t * 1.2 + i) * 0.03, Math.PI / 2, 0); });
       wk.forEach(w => { w.material.opacity += ((s.go ? 0.6 : 0) - w.material.opacity) * Math.min(1, dt * 2); w.visible = w.material.opacity > 0.02; });
-      sea.userData.tex.offset.set(t * 0.03, t * 0.05);
-      for (const o of buoys) { const on = Math.sin(t * 5 + o.b.w * 9) > -0.3; o.glow.visible = o.lamp.visible = !o.b.got && on; o.g.position.y = Math.sin(t * 2 + o.b.w * 7) * 0.12; o.g.rotation.z = Math.sin(t * 1.7 + o.b.w * 5) * 0.08; if (o.b.got && o.g.scale.y > 0.45) o.g.scale.setScalar(Math.max(0.45, o.g.scale.y - dt * 2)); }
+      sea.tick(t, sX, sZ - 60, 0); sea.light(0, sX, 4, sZ - 20, 48, 0xbcd6ff, 0.45);
+      flag.position.y = sea.h(sX, sZ) * 0.55; fol.forEach(o => { o.position.y = sea.h(o.position.x, o.position.z) * 0.55; });
+      for (const o of buoys) { const on = Math.sin(t * 5 + o.b.w * 9) > -0.3; o.glow.visible = o.lamp.visible = !o.b.got && on; o.g.position.y = sea.h(o.g.position.x, o.g.position.z) * 0.85; o.g.rotation.z = Math.sin(t * 1.7 + o.b.w * 5) * 0.08; if (o.b.got && o.g.scale.y > 0.45) o.g.scale.setScalar(Math.max(0.45, o.g.scale.y - dt * 2)); }
       for (const o of rocks) { const p = mod(t * 0.5 + o.r.sd, 1); o.ring.scale.setScalar(1 + p * 0.35); o.ring.material.opacity = 0.34 * (1 - p); }
       const lit = s.lit ? 1 : 0; lanM.emissiveIntensity += (lit * 3 - lanM.emissiveIntensity) * Math.min(1, dt * 5); lGlow.material.opacity = lanM.emissiveIntensity / 3 * (0.85 + 0.15 * Math.sin(t * 9));
-      beam.visible = beam2.visible = s.lit; spot.intensity = lit * 2.2;
-      spot.target.position.set(sX + Math.sin(t * 1.1) * 26, 0, sZ - 8 + Math.cos(t * 0.7) * 10); beam.lookAt(spot.target.position); beam2.lookAt(spot.target.position);
+      beam.visible = beam2.visible = s.lit; spot.intensity = lit * 1.5;
+      spot.target.position.set(sX + Math.sin(t * 1.1) * 26, 0, sZ - 8 + Math.cos(t * 0.7) * 10); beam.lookAt(spot.target.position); beam2.lookAt(spot.target.position); sea.beam(Lp, spot.target.position, 0xfff0b4, s.lit ? 0.5 : 0, Math.cos(0.05));
       sl.intensity = 2.0;
       const f3 = fol[2].position, swA = Math.sin(s.sweep * 0.9) * 0.75; sweep.position.set(f3.x, 4, f3.z); sweepT.position.set(f3.x + Math.sin(swA) * 200, 0, f3.z - Math.cos(swA) * 200); sweep.intensity = s.go ? 1.6 : 0; sweepB.visible = s.go; sweepB.position.copy(sweep.position); sweepB.lookAt(sweepT.position);
-      flares.forEach((o, i) => { const f = s.flares[i]; if (!f) { o.l.intensity = 0; o.g.material.opacity = 0; o.ch.visible = false; return; } const kk = Math.min(1, f.t * 3) * Math.min(1, (f.dur - f.t) * 1.5) * (0.85 + 0.15 * Math.sin(t * 23 + f.x)); C.L2W(f.x, f.y, tA); tA.y = 38 - f.t * 2.4; o.l.position.copy(tA); o.l.intensity = 1.15 * kk; o.g.position.copy(tA); o.g.material.opacity = kk; o.ch.visible = true; o.ch.position.set(tA.x, tA.y + 3.2, tA.z); });
+      flares.forEach((o, i) => { const f = s.flares[i]; if (!f) { o.l.intensity = 0; o.g.material.opacity = 0; o.ch.visible = false; return; } const kk = Math.min(1, f.t * 3) * Math.min(1, (f.dur - f.t) * 1.5) * (0.85 + 0.15 * Math.sin(t * 23 + f.x)); C.L2W(f.x, f.y, tA); tA.y = 38 - f.t * 2.4; o.l.position.copy(tA); o.l.intensity = 1.15 * kk; C.req.push([tA.x, tA.y, tA.z, 0.9 * kk, 0xfff2d8, 140]); o.g.position.copy(tA); o.g.material.opacity = kk; o.ch.visible = true; o.ch.position.set(tA.x, tA.y + 3.2, tA.z); });
       if (s.doc && !G.docs[0]) { docG.position.set(cxw(s.doc.w) + s.doc.f * hww(s.doc.w), 1.2, -s.doc.w * HK); docG.material.opacity = 0.6 + 0.3 * Math.sin(t * 6); } else docG.material.opacity = 0;
       // 카메라: 등대를 켜기 전에는 팔미도를 비추고, 켜지면 함대 뒤로 날아간다
       const want = !s.lit || s.wait > 0.35 ? 0 : 1; cb += (want - cb) * Math.min(1, dt * (want ? 1.5 : 4)); if (Math.abs(want - cb) < 0.002) cb = want;
@@ -2445,13 +2538,12 @@ const V3 = (() => {
     const k = K(), s = G.s2, by = S2.beachY(), Zf = (S2.flatY() - by) * k, Zs = (S2.startY() - by) * k, Zfl = (H * 0.955 - by) * k, HW = Math.max(W * k * 0.8, 100);
     const LX = i => (S2.laneX(i) - W / 2) * k, wY = () => (S2.tide() - 7) * 0.5, Xw = x => (x - W / 2) * k, Zw = y => (y - by) * k;
     const gH = (x, z) => { if (z >= 0) return Math.max(-9, -z / Zf * 2.5) + (n2(x * 0.4, z * 0.4) - 0.5) * 0.1; const rise = Math.min(2.0, -z * 0.42); return rise + (n2(x * 0.045 + 3, z * 0.06 + 7) * 10 * clamp((-z - 9) / 28, 0, 1) + n2(x * 0.16, z * 0.16) * 1.3 * clamp((-z - 6) / 10, 0, 1)) * (1 - 0.5 * clamp((-z - 95) / 60, 0, 1)); };
-    const C = baseScene({ fog: 0xe3c7a2, fogD: 0.0026, sky: [0x3f6fae, 0xf6d3a4, 0xefc091], hemi: [0xd4e6ff, 0x7b6850, 1.3], sun: [0xffe6bd, 2.9], sunDir: V(-0.62, 0.5, 0.28).normalize(), shadow: Math.max(110, HW * 1.15), exp: 1.0 }), sc = C.scene;
+    const C = baseScene({ fog: 0xe3c7a2, fogD: 0.0026, sky: [0x3f6fae, 0xf6d3a4, 0xefc091], hemi: [0xd4e6ff, 0x7b6850, 1.7], sun: [0xffdcae, 3.0], sunDir: V(-0.34, 0.3, -0.89).normalize(), shadow: Math.max(110, HW * 1.15), exp: 0.86, cloud: 0.36, disc: 0.034, glow: 1 }), sc = C.scene;
     C.sun.target.position.set(0, 0, 10);
-    const sunS = spr(0xffe2b0, 1500, 0.8); sunS.position.set(-0.5, 0.2, -0.86).normalize().multiplyScalar(2700); C.far.add(sunS); const sunC = spr(0xfffaea, 360, 1); sunC.position.copy(sunS.position); C.far.add(sunC);
     const sand = new T.Color(0xcdb98a), mud1 = new T.Color(0x7a674d), mud2 = new T.Color(0x4c4032), g1 = new T.Color(0x56733f), g2 = new T.Color(0x35502d), tmpc = new T.Color();
     sc.add(terrain(-HW * 1.7, HW * 1.7, 120, -190, Zfl + 70, 130, gH, (x, z, h) => z > 0.6 ? tmpc.copy(mud1).lerp(mud2, clamp(z / Zf, 0, 1) * 0.8 + n2(x * 0.6, z * 0.6) * 0.25) : z > -6.5 ? tmpc.copy(sand).multiplyScalar(0.9 + n2(x, z) * 0.15) : tmpc.copy(g1).lerp(g2, clamp(n2(x * 0.2, z * 0.2) * 0.8 + h * 0.04, 0, 1))));
-    const sea = water(0x2f7786, 0xfff0d0, 110, 0.8); sc.add(sea);
-    const foam = new T.Mesh(new T.PlaneGeometry(HW * 3.4, 1.5).rotateX(-Math.PI / 2), new T.MeshBasicMaterial({ color: 0xf4fbff, transparent: true, opacity: 0.6, depthWrite: false })), foam2 = new T.Mesh(foam.geometry, new T.MeshBasicMaterial({ color: 0xf4fbff, transparent: true, opacity: 0.28, depthWrite: false })); sc.add(foam, foam2);
+    const sea = C.sea = C.oc({ deep: 0x0c4658, shal: 0x3aa79a, amp: 0.5, wind: -1.5, alpha: 0.9, shore: [1, Zf, 0, 0], foam: 0.72, foamC: 1.1 }); sc.add(sea.mesh);
+    const foam = new T.Mesh(new T.PlaneGeometry(HW * 3.4, 1.5).rotateX(-Math.PI / 2), new T.MeshBasicMaterial({ color: 0xf4fbff, transparent: true, opacity: 0.6, depthWrite: false })), foam2 = new T.Mesh(foam.geometry, new T.MeshBasicMaterial({ color: 0xf4fbff, transparent: true, opacity: 0.28, depthWrite: false }));
     // 나무·건물·기름 탱크
     seed = 7; const bx = [0, 1, 2].map(LX), farB = (x, z, r) => bx.every(b => Math.hypot(x - b, z + 4.6) > r);
     const bl = []; for (let i = 0; i < 16; i++) { const w = 2.6 + srand() * 2.6, d = 1.6 + srand() * 1.4, h = 1.3 + srand() * 1.5, x = (srand() - 0.5) * HW * 1.7, z = -11 - srand() * 30; if (!farB(x, z, 9)) continue; const m = box(w, h, d, M(srand() > 0.5 ? 0x8a7058 : 0x74766f), x, gH(x, z) + h / 2 - 0.15, z); m.rotation.y = (srand() - 0.5) * 0.6; sc.add(m); sc.add(box(w * 1.06, 0.18, d * 1.1, M(0x4a4038), x, gH(x, z) + h - 0.1, z)); bl.push([x, z]); }
@@ -2480,15 +2572,15 @@ const V3 = (() => {
     };
     C.update = (t, dt) => {
       const wy = wY(), sz = shoreZ(wy);
-      sea.position.y = wy; sea.userData.tex.offset.set(t * 0.02, t * 0.06);
+      sea.tick(t, 0, Zfl * 0.4, wy);
       foam.position.set(0, wy + 0.05, sz + 0.5 + Math.sin(t * 1.4) * 0.35); foam2.position.set(0, wy + 0.04, sz + 2.2 + Math.sin(t * 1.1 + 2) * 0.5);
       for (const o of bats) { const bt = o.bt, aim = bt.st === 'aim' && !bt.dead; o.gun.visible = !bt.dead; o.gun.rotation.y = aim ? 0 : Math.sin(t * 0.8 + bt.lane) * 0.35; o.bm.emissiveIntensity = aim ? 0.6 + 0.6 * Math.abs(Math.sin(t * 12)) : 0; o.strip.material.opacity = aim ? 0.22 + 0.2 * Math.sin(t * 16) : 0; o.strip.position.y = wy + 0.12; o.strip.visible = aim;
         if (bt.flash > 0) { put(C.pb, o.pos.x, o.pos.y, o.pos.z + 3.6, 9, 255, 220, 150, 1); C.req.push([o.pos.x, o.pos.y + 1, o.pos.z + 3, 3, 0xffc070, 60]); }
         if (bt.dead) { const r = 5 + Math.sin(t * 10 + o.pos.x) * 1; put(C.pb, o.pos.x, o.pos.y, o.pos.z, r, 255, 150, 60, 0.75); C.req.push([o.pos.x, o.pos.y + 2, o.pos.z, 1.6 + Math.sin(t * 13) * 0.4, 0xff8030, 40]); } }
-      boats.forEach((o, i) => { const b = s.boats[i]; if (!b) { o.g.visible = false; return; } o.g.visible = true; const X = LX(b.lane) + (b.st === 'stuck' ? Math.sin(t * 20) * 0.12 : 0), Z = Zw(b.y), gr = gH(X, Z) + 0.2, fl = wy - 0.1 + Math.sin(t * 3 + i) * 0.06; o.g.position.set(X, Math.max(gr, fl), Z); o.g.rotation.set(0, b.st === 'back' ? -Math.PI / 2 : Math.PI / 2, b.st === 'stuck' ? 0.07 : Math.sin(t * 2.6 + i) * 0.03); o.g.userData.troops.visible = b.st !== 'back' && b.st !== 'land'; o.w.visible = b.st === 'go' || b.st === 'back'; });
+      boats.forEach((o, i) => { const b = s.boats[i]; if (!b) { o.g.visible = false; return; } o.g.visible = true; const X = LX(b.lane) + (b.st === 'stuck' ? Math.sin(t * 20) * 0.12 : 0), Z = Zw(b.y), gr = gH(X, Z) + 0.2, fl = sea.h(X, Z) - 0.12; o.g.position.set(X, Math.max(gr, fl), Z); o.g.rotation.set(0, b.st === 'back' ? -Math.PI / 2 : Math.PI / 2, b.st === 'stuck' ? 0.07 : Math.sin(t * 2.6 + i) * 0.03); o.g.userData.troops.visible = b.st !== 'back' && b.st !== 'land'; o.w.visible = b.st === 'go' || b.st === 'back'; });
       men.forEach((m, i) => { const d = s.men[i]; if (!d) { m.visible = false; return; } m.visible = true; const X = Xw(d.x), Z = Zw(d.y); m.position.set(X, gH(X, Z) + Math.abs(Math.sin(d.ph + d.life * 18)) * 0.2, Z); m.rotation.y = Math.PI / 2; });
       flags.forEach((o, i) => { o.g.visible = i < G.stat.land; o.f.rotation.y = Math.sin(t * 6 + i) * 0.35; });
-      fleet.forEach((o, i) => { o.position.y = Math.sin(t * 1.3 + i * 1.7) * 0.15; o.rotation.x = Math.sin(t * 1.1 + i) * 0.02; });
+      fleet.forEach((o, i) => { o.position.y = sea.h(o.position.x, o.position.z) * 0.5; o.rotation.x = Math.sin(t * 1.1 + i) * 0.02; });
       for (const f of s.flashes) { const q = C.L2W(f.x, f.y, tA), a = 1 - f.t / 0.25; put(C.pb, q.x + 4, 3.4, q.z - 1, f.big ? 26 : 13, 255, 225, 160, a); put(C.pb, q.x + 4, 3.4, q.z - 1, f.big ? 9 : 5, 255, 255, 240, a); C.req.push([q.x + 4, 6, q.z - 3, (f.big ? 7 : 3.5) * a, 0xffc878, f.big ? 150 : 90]); }
       for (const f of s.fires) { const q = C.L2W(f.x, f.y, tA), r = 5.5 + Math.sin(t * 9 + f.x) * 1.1; put(C.pb, q.x, q.y + 0.8, q.z, r, 255, 160, 70, 0.7); }
       const arc = (x0, y0, x1, y1, p, h0, h1, hgt) => { C.L2W(x0, y0, tA); C.L2W(x1, y1, tB); tC.lerpVectors(tA, tB, p); tC.y = h0 + (h1 - h0) * p + Math.sin(p * Math.PI) * hgt; return tC; };
@@ -2522,11 +2614,10 @@ const V3 = (() => {
   /* ================= 3단계: 저녁 밀물의 레드 비치 방파제 ================= */
   function s3() {
     const k = K(), s = G.s3, wx = S3.wallX(), top = S3.wallTop(), YB = H * 0.95, X = x => (x - wx) * k, Y = y => (YB - y) * k, topY = Y(top), tideY = m => m / 10 * H * 0.5 * k;
-    const sunDir = V(-0.13, 0.085, -1).normalize();
-    const C = baseScene({ fog: 0xc08a68, fogD: 0.0019, sky: [0x241a3a, 0xdd7a4c, 0xf7c47a], hemi: [0xd8b8d0, 0x5a4046, 1.75], sun: [0xffb070, 3.0], sunDir, shadow: 120, exp: 1.12 }), sc = C.scene;
+    const sunDir = V(-0.9, 0.2, -0.38).normalize();
+    const C = baseScene({ fog: 0xc08a68, fogD: 0.0019, sky: [0x241a3a, 0xdd7a4c, 0xf7c47a], hemi: [0xd8b8d0, 0x5a4046, 1.3], sun: [0xffa866, 3.4], sunDir, shadow: 120, exp: 1.05, cloud: 0.5, disc: 0.03, glow: 1 }), sc = C.scene;
     C.sun.target.position.set(0, topY * 0.5, -20);
-    const sunS = spr(0xffc890, 1700, 0.85); sunS.position.copy(sunDir).multiplyScalar(2700); C.far.add(sunS); const sunC = spr(0xfff0d0, 300, 1); sunC.position.copy(sunS.position); C.far.add(sunC);
-    const sea = water(0x66586a, 0xffc890, 70, 0.96); sc.add(sea);
+    const sea = C.sea = C.oc({ deep: 0x16182c, shal: 0x70505c, amp: 0.8, wind: 0.25, shore: [2, 0, 0, 0], foam: 0.62, foamC: 0.75 }); sc.add(sea.mesh);
     // 방파제 (돌 쌓기 무늬는 직접 그림)
     const WH = topY + 30;
     const brick = cvTex(1024, 1024, (x, w, h) => { seed = 11; x.fillStyle = '#5a534d'; x.fillRect(0, 0, w, h); const rh = 26; for (let r = 0, y = 0; y < h; r++, y += rh) { let px = -(r % 2) * 30; while (px < w) { const bw = 50 + srand() * 36, l = 34 + srand() * 14; x.fillStyle = `hsl(${22 + srand() * 14},${6 + srand() * 7}%,${l}%)`; x.fillRect(px + 1.5, y + 1.5, bw - 3, rh - 3); x.fillStyle = 'rgba(255,255,255,.12)'; x.fillRect(px + 1.5, y + 1.5, bw - 3, 3); x.fillStyle = 'rgba(0,0,0,.25)'; x.fillRect(px + 1.5, y + rh - 5, bw - 3, 3.5); px += bw; } }
@@ -2536,7 +2627,7 @@ const V3 = (() => {
     const wm = new T.MeshStandardMaterial({ map: brick, roughness: 0.95 }), cm = M(0x6d655c), wall = new T.Mesh(new T.BoxGeometry(260, WH, 1200), [cm, wm, cm, cm, cm, cm]); wall.position.set(130, topY - WH / 2, -380); wall.receiveShadow = true; wall.castShadow = true; sc.add(wall);
     { const n = 420, im = new T.InstancedMesh(new T.SphereGeometry(1, 7, 5), M(0xa0906a), n), d = new T.Object3D(); for (let i = 0; i < n; i++) { const row = i % 3 === 2; d.position.set(1.1 + (row ? 0.2 : 0), topY + (row ? 1.35 : 0.5), 150 - (i - (row ? 0.5 : 0)) * 1.25); d.scale.set(1.1, 0.6, 0.95); d.rotation.y = hash(i) * 0.4; d.updateMatrix(); im.setMatrixAt(i, d.matrix); } im.castShadow = true; im.receiveShadow = true; sc.add(im); }
     // 인천 시가지
-    seed = 23; const winM = new T.MeshBasicMaterial({ color: 0xff9a4a });
+    seed = 23; const winM = new T.MeshBasicMaterial({ color: 0xff9a4a }); winM.color.multiplyScalar(3);
     for (let i = 0; i < 60; i++) { const w = 7 + srand() * 12, h = 7 + srand() * 26, d = 7 + srand() * 12, x = 12 + srand() * 150, z = 90 - srand() * 620, b = box(w, h, d, M(0x33262c), x, topY + h / 2, z); sc.add(b); if (srand() < 0.4) { const rf = mesh(new T.ConeGeometry(Math.max(w, d) * 0.72, 4, 4), M(0x2a1e24), x, topY + h + 2, z); rf.rotation.y = Math.PI / 4; sc.add(rf); } if (srand() < 0.55) for (let j = 0; j < 2; j++) { const wn = new T.Mesh(new T.PlaneGeometry(0.9, 1.2), winM); wn.position.set(x - w / 2 - 0.05, topY + h * (0.35 + srand() * 0.4), z + (srand() - 0.5) * d * 0.6); wn.rotation.y = -Math.PI / 2; sc.add(wn); } }
     const zOf = x => x > wx + 30 * U ? -75 + hash(Math.round(x / (70 * U)) + 3) * 95 : 0;
     const fires = [0.22, 0.55, 0.86].map(px => { const lx = wx + (W - wx) * px; return V(X(lx), topY + 4, zOf(lx)); });
@@ -2554,7 +2645,7 @@ const V3 = (() => {
     let lookY = topY * 0.6;
     C.update = (t, dt) => {
       const L = S3.tide(), seaY = tideY(L);
-      sea.position.y = seaY; sea.userData.tex.offset.set(t * 0.06, t * 0.03);
+      sea.tick(t, -40, -70, seaY);
       let off = 0; if (s.st === 'arrive') off = -s.stT / 0.8 * W * 0.5; if (s.st === 'leave') off = -(1 - s.stT / 0.5) * W * 0.5;
       const deck = s.st === 'climb' ? s.deckY : S3.deck(), bowX = X(wx - 4 * U + off), dY = Y(deck);
       main.g.position.set(bowX - 10.2, dY - 5.0, 0); main.g.rotation.set(Math.sin(t * 1.9) * 0.03, 0, s.st === 'climb' ? 0 : Math.sin(t * 2.3) * 0.025);
@@ -2565,7 +2656,7 @@ const V3 = (() => {
       deco.forEach((o, i) => { const z = -62 - i * 58, ph = t + 2.3 + i * 1.7, y = seaY + S3.bob(ph) * k * 0.8 + 1.6; o.g.position.set(-10.6, y - 5, z); o.g.rotation.x = Math.sin(ph * 1.7) * 0.03; setLadder(o.l, -2.6, y + 0.4, z, 0.6, topY + 0.6); o.l.visible = true; o.g.userData.troops.visible = true;
         o.cl.forEach((m, j) => { const q = mod(t * 0.38 + j * 0.25 + i * 0.4, 1); m.visible = true; m.position.set(-2.6 + 3.2 * q - 0.5, y + 0.4 + (topY + 0.2 - y) * q - 0.6, z); m.rotation.z = -0.25 + Math.sin(t * 9 + j) * 0.1; }); });
       wallMen.forEach((m, i) => { m.visible = i < Math.min(16, G.stat.ladder * 3); });
-      fleet.forEach((o, i) => { o.position.y = Math.sin(t * 1.1 + i) * 0.3; if (s.fl[i] > 0) { const a = s.fl[i] / 0.45; put(C.pb, o.position.x + 14, 9, o.position.z, 90 * a, 255, 220, 160, 0.9); put(C.pb, o.position.x + 14, 9, o.position.z, 34 * a, 255, 255, 235, 1); } });
+      fleet.forEach((o, i) => { o.position.y = sea.h(o.position.x, o.position.z) * 0.4; if (s.fl[i] > 0) { const a = s.fl[i] / 0.45; put(C.pb, o.position.x + 14, 9, o.position.z, 90 * a, 255, 220, 160, 0.9); put(C.pb, o.position.x + 14, 9, o.position.z, 34 * a, 255, 255, 235, 1); } });
       fires.forEach((f, i) => { const r = 16 + Math.sin(t * 5 + i * 9) * 2.5; put(C.pb, f.x, f.y, f.z, r, 255, 140, 60, 0.6); C.req.push([f.x, f.y + 5, f.z, 1.3 + Math.sin(t * 11 + i) * 0.3, 0xff8040, 90]); });
       for (const r of s.rk) { if (r.t < 0) continue; let bi = 0, bd = 1e9; FLEETX.forEach((f, i) => { const d = Math.abs(W * f + 20 * U - r.x0); if (d < bd) { bd = d; bi = i; } }); const a = fleet[bi].position, ez = zOf(r.x1), at = p => tC.set(a.x + 14 + (X(r.x1) - a.x - 14) * p, 9 + (Y(r.y1) - 9) * p + Math.sin(p * Math.PI) * 90, a.z + (ez - a.z) * p), p = r.t / r.dur, h = V().copy(at(p)), tl = V().copy(at(Math.max(0, p - 0.05))); put(C.pb, h.x, h.y, h.z, 5, 255, 250, 230, 1); trail(C.pb, h, tl, 8, 3.2, 255, 190, 120); }
       if (s.doc && !G.docs[2]) { const [dx, dy] = S3.docPos(s.doc.t); docG.position.set(X(dx), Y(dy), 0); docG.material.opacity = clamp(Math.min(1, s.doc.t * 2) * Math.min(1, (7 - s.doc.t) * 1.5), 0, 1) * 0.8; } else docG.material.opacity = 0;
@@ -2615,7 +2706,7 @@ const V3 = (() => {
     const CN = 90, cg = new T.BufferGeometry(); cg.setAttribute('position', new T.BufferAttribute(new Float32Array(CN * 2 * 3), 3)); cg.setAttribute('color', new T.BufferAttribute(new Float32Array(CN * 2 * 3), 3)); { const ix = []; for (let i = 0; i < CN - 1; i++) { const a = i * 2; ix.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); } cg.setIndex(ix); }
     const curtain = new T.Mesh(cg, new T.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.55, blending: T.AdditiveBlending, depthWrite: false, side: T.DoubleSide })); curtain.frustumCulled = false; sc.add(curtain);
     const landing = smooth(LANDING.map(p => geo(p[0], p[1])), 10);
-    const C = { scene: sc, far: null, pa, pb, fl: [], req: [], exposure: 1, tone: T.NoToneMapping, isMap: true, planar: true, o: null };
+    const C = { scene: sc, far: null, pa, pb, fl: [], req: [], exposure: 1, isMap: true, planar: true, o: null };
     const arrow = (pts, kk, col, wd, t) => {
       if (kk <= 0.02) return; const cut = partial(smooth(pts.map(p => TP(p[0], p[1])), 10), kk); if (cut.length < 2) return;
       const n = cut.length, [ex, ey] = cut[n - 1], [px, py] = cut[Math.max(0, n - 3)], an = Math.atan2(ey - py, ex - px), hw = wd * TS / 53;
@@ -2695,7 +2786,7 @@ const V3 = (() => {
     }
     if (!cur.isMap) for (const g of G.glows) { const q = g.life / g.dur, w = cur.L2W(g.x, g.y, tA), c = g.col.split(','), z = cur.planar ? w.z : cur.zOf(g.x), r = Math.min(46, g.r * k * 1.3 * (0.7 + q * 0.5)); put(B, w.x, w.y + (cur.planar ? 1.5 : 0), z, r, +c[0], +c[1], +c[2], g.a * (1 - q)); if (g.r > 120 * U) cur.req.push([w.x, w.y + (cur.planar ? 5 : 0), z, 9 * g.a * (1 - q), 0xffa050, Math.min(160, g.r * k * 1.4)]); }
     for (const P of [A, B]) { const ge = P.geometry; ge.setDrawRange(0, P.n); ge.attributes.position.needsUpdate = ge.attributes.col.needsUpdate = ge.attributes.size.needsUpdate = true; }
-    cur.req.sort((a, b) => b[3] - a[3]); cur.fl.forEach((l, i) => { const r = cur.req[i]; if (!r) { l.intensity = 0; return; } l.position.set(r[0], r[1], r[2]); l.intensity = r[3]; l.color.set(r[4]); l.distance = r[5]; });
+    cur.req.sort((a, b) => b[3] - a[3]); if (cur.sea) for (let i = 0; i < 3; i++) { const r = cur.req[i]; r ? cur.sea.light(i + 1, r[0], r[1], r[2], r[5] * 1.2, r[4], Math.min(3, r[3] * 0.5)) : cur.sea.light(i + 1, 0, -999, 0, 1, 0, 0); } cur.fl.forEach((l, i) => { const r = cur.req[i]; if (!r) { l.intensity = 0; return; } l.position.set(r[0], r[1], r[2]); l.intensity = r[3]; l.color.set(r[4]); l.distance = r[5]; });
   }
   function dispose(c) { if (!c) return; c.scene.traverse(o => { if (o.geometry) o.geometry.dispose(); if (o.material) (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => { for (const key of ['map', 'normalMap']) if (m[key] && m[key] !== glowTex && m[key] !== wakeT) m[key].dispose(); m.dispose(); }); }); }
   function frame(t, dt) {
@@ -2711,8 +2802,8 @@ const V3 = (() => {
     cam.updateMatrixWorld();
     if (cur.far) cur.far.position.copy(cam.position);
     const sc = R.domElement.height / (2 * Math.tan(cam.fov * Math.PI / 360)); cur.pa.material.uniforms.sc.value = cur.pb.material.uniforms.sc.value = sc;
-    R.toneMapping = cur.tone; R.toneMappingExposure = cur.exposure;
-    R.render(cur.scene, cam);
+    if (cur.su) cur.su.sTime.value = t;
+    post.render(cur.scene, cam, cur.isMap ? { ex: 1, tm: 0, th: 0.74, bs: 0.5, vg: 0.2, paint: 0, t } : { ex: cur.exposure * 1.45, tm: 1, th: 1.0, bs: 0.7, vg: 0.5, paint: lowQ || window.__noPaint ? 0 : 0.72, t });
     // 느린 기기에서는 해상도와 그림자를 줄인다
     if (dt > 0.034) slowN++; else slowN = Math.max(-30, slowN - 0.25);
     if (window.__noLow) slowN = 0;
