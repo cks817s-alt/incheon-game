@@ -287,9 +287,13 @@
   #promo small { display:block; color:var(--gold); font-weight:900; letter-spacing:.2em; font-size:.8em; }
   #promo b { display:block; font-size:1.6em; color:#fff; }
   .ins svg { width:100%; height:100%; display:block; }
-  #docCard { position:absolute; left:1.2em; top:22%; width:min(24em, 44vw); opacity:0; transform:translateX(-2em) rotate(-2deg); transition:opacity .35s, transform .35s; pointer-events:none;
+  #docToast { position:absolute; left:50%; top:6em; max-width:94vw; transform:translate(-50%, -.6em); opacity:0; transition:opacity .3s, transform .3s; pointer-events:none; z-index:6;
+    background:rgba(239,227,196,.93); color:#3a2a14; border:1px solid #a8925e; border-radius:2em; padding:.4em 1.1em; font-weight:800; font-size:.92em; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; box-shadow:0 .4em 1.2em rgba(0,0,0,.45); }
+  #docToast.show { opacity:1; transform:translate(-50%, 0); }
+  #docToast em { font-style:normal; color:#1f6a3a; margin-left:.5em; }
+  #docCard { position:absolute; left:50%; bottom:4%; top:auto; z-index:7; width:min(30em, 92vw); opacity:0; transform:translate(-50%, 1.5em) rotate(-1deg); transition:opacity .35s, transform .35s; pointer-events:none;
     background:linear-gradient(180deg,#efe3c4,#dccb9f); color:#3a2a14; border-radius:.4em; padding:.9em 1.1em 1em; box-shadow:0 .8em 2em rgba(0,0,0,.6); border:1px solid #a8925e; }
-  #docCard.show { opacity:1; transform:rotate(-2deg); }
+  #docCard.show { opacity:1; transform:translate(-50%, 0) rotate(-1deg); }
   #docCard .st { position:absolute; right:.8em; top:.6em; border:.15em solid #c8352a; color:#c8352a; font-weight:900; padding:0 .4em; transform:rotate(10deg); letter-spacing:.15em; }
   #docCard small { display:block; font-weight:900; color:#8a5a1a; letter-spacing:.1em; }
   #docCard b { display:block; font-size:1.2em; margin:.15em 0 .35em; }
@@ -362,7 +366,6 @@
     .grid3, .qwrap { grid-template-columns:1fr; }
     .qfig img, .qfig svg { max-height:34vh; }
     h1 { font-size:3em; }
-    #docCard { width:auto; right:1.2em; top:auto; bottom:13em; }
     #combo { top:18%; font-size:.85em; }
     #demoTag b { font-size:1.15em; white-space:nowrap; }
     .top { flex-wrap:wrap; }
@@ -394,6 +397,7 @@
   <div id="banner" class="serif"><b></b><span></span></div>
   <div id="combo"><small>COMBO</small><b>0</b><em>×1</em><i></i></div>
   <div id="promo"><div class="ins"></div><div><small>진급!</small><b></b></div></div>
+  <div id="docToast"></div>
   <div id="docCard"><div class="st">극비</div><small></small><b></b><p></p><i></i></div>
   <div id="hint"></div>
   <div class="bottom">
@@ -1125,10 +1129,11 @@ function gotDoc(i, x, y) {
   if (G.docs[i]) return; G.docs[i] = true; G.score += 500;
   Snd.secret(); glow(x, y, 160 * U, 0.8, '255,236,170'); confetti(16, x - 40 * U, x + 40 * U, y);
   floater(x, y - 30 * U, '📄 비밀문서 발견! +500', '#ffe9a0', 22, 'judge');
-  const c = $('docCard'), d = DOCS[i];
-  c.querySelector('small').textContent = d.k; c.querySelector('b').textContent = d.h; c.querySelector('p').textContent = d.p;
-  c.querySelector('i').textContent = '🎁 퀴즈에서 힌트 1번 사용 가능 (' + G.docs.filter(Boolean).length + ' / 3장)';
-  c.classList.add('show'); clearTimeout(docT); docT = setTimeout(() => c.classList.remove('show'), 5200);
+  // 게임 중에는 화면 위쪽에 짧은 알림만 (내용 전체는 작전 성공 화면에서 보여 줌)
+  G.docGot = i; const d = DOCS[i], tb = document.querySelector('#hud .top'), tt = $('docToast');
+  tt.style.top = ((tb ? tb.getBoundingClientRect().bottom : 60) + 8) + 'px';
+  tt.innerHTML = ''; tt.append('📄 ' + d.k.replace('기밀문서', '기밀문서 획득') + ' — ' + d.h); const em = document.createElement('em'); em.textContent = '퀴즈 힌트 ' + G.docs.filter(Boolean).length + '/3'; tt.append(em);
+  tt.classList.add('show'); clearTimeout(docT); docT = setTimeout(() => tt.classList.remove('show'), 2800);
   checkPromo();
 }
 function drawDoc(x, y, t, k = 1) {
@@ -2987,10 +2992,17 @@ function stageStars(i) {
   if (i === 1) return (st.land >= 5 ? 1 : 0) + (st.land >= 8 ? 1 : 0) + (st.land >= 10 && st.bat >= 2 ? 1 : 0);
   return (st.ladder >= 2 ? 1 : 0) + (st.ladder >= 4 ? 1 : 0) + (st.ladder >= 6 ? 1 : 0);
 }
+function showDocCard(i) {
+  const c = $('docCard'), d = DOCS[i];
+  c.querySelector('small').textContent = d.k; c.querySelector('b').textContent = d.h; c.querySelector('p').textContent = d.p;
+  c.querySelector('i').textContent = '🎁 퀴즈에서 힌트 1번 사용 가능 (' + G.docs.filter(Boolean).length + ' / 3장)';
+  $('docToast').classList.remove('show'); c.classList.add('show'); clearTimeout(docT); docT = setTimeout(() => c.classList.remove('show'), 5600);
+}
 function stageClear(bonus, msg) {
   if (G.sp !== 'run') return;
-  G.sp = 'clear'; G.spT = 3.6; G.score += bonus; G.lbT = 1; G.fever = 0;
-  actButton(false); Snd.clear(); checkPromo();
+  const hasDoc = G.docGot === G.stage; G.docGot = -1;
+  G.sp = 'clear'; G.spT = hasDoc ? 5.8 : 3.6; if (hasDoc) setTimeout(() => showDocCard(G.stage), 500); G.score += bonus; G.lbT = 1; G.fever = 0;
+  actButton(false); Snd.clear(); checkPromo(); clearTimeout(hintT); $('hint').classList.remove('show');
   const n = stageStars(G.stage); G.stars[G.stage] = n;
   $('scH').textContent = n === 0 ? ['작전 1 끝', '작전 2 끝', '작전 3 끝'][G.stage] : ['작전 1 성공!', '작전 2 성공!', '작전 3 성공!'][G.stage];
   $('scMsg').textContent = msg; $('scSub').textContent = '최대 콤보 ' + G.maxCombo + ' · PERFECT ' + G.jc.PERFECT + '번';
@@ -2999,7 +3011,7 @@ function stageClear(bonus, msg) {
   const bx = box.querySelector('.box'); bx.style.animation = 'none'; void bx.offsetWidth; bx.style.animation = '';
   starT.forEach(clearTimeout); starT = [];
   stars.forEach((e, k) => starT.push(setTimeout(() => { e.className = (k < n ? 'on ' : '') + 'pop'; if (k < n) { Snd.star(k); G.shake = Math.max(G.shake, 5 * U); confetti(k === 2 ? 40 : 14, W * 0.3, W * 0.7, H * 0.35); } else Snd.dry(); }, 450 + k * 380)));
-  starT.push(setTimeout(() => box.classList.add('hidden'), 3500));
+  starT.push(setTimeout(() => box.classList.add('hidden'), hasDoc ? 5700 : 3500));
 }
 function enterStage(i) {
   $('sclear').classList.add('hidden'); $('combo').dataset.stage = i;
@@ -3164,7 +3176,7 @@ function renderToday() {
 function goTitle() {
   Snd.droneOff(); newGame();
   for (const id of ['fever', 'sclear', 'newrec', 'demoTag']) $(id).classList.add('hidden');
-  $('promo').classList.remove('show'); $('docCard').classList.remove('show'); $('combo').classList.remove('show'); starT.forEach(clearTimeout);
+  $('promo').classList.remove('show'); $('docCard').classList.remove('show'); $('docToast').classList.remove('show'); $('combo').classList.remove('show'); starT.forEach(clearTimeout);
   for (const id of ['hud', 'result', 'brief', 'scard', 'cutin', 'credits']) $(id).classList.add('hidden');
   Snd.requiemOff();
   $('title').classList.remove('hidden'); $('hud').classList.remove('cine');
@@ -3173,7 +3185,7 @@ function goTitle() {
 function startGame() {
   if (G && G.demo) endDemo();
   for (const id of ['fever', 'sclear', 'newrec']) $(id).classList.add('hidden');
-  $('promo').classList.remove('show'); $('docCard').classList.remove('show'); $('combo').classList.remove('show');
+  $('promo').classList.remove('show'); $('docCard').classList.remove('show'); $('docToast').classList.remove('show'); $('combo').classList.remove('show');
   Snd.init(); Snd.demo(false); Snd.click(); Snd.droneOn();
   newGame(); for (const k in hudCache) delete hudCache[k];
   $('title').classList.add('hidden'); $('result').classList.add('hidden'); $('hud').classList.add('hidden');
@@ -3298,7 +3310,7 @@ function endDemo() {
   if (!G.demo) return;
   Snd.demo(false); $('demoTag').classList.add('hidden');
   for (const id of ['fever', 'sclear', 'newrec']) $(id).classList.add('hidden');
-  $('promo').classList.remove('show'); $('docCard').classList.remove('show'); $('combo').classList.remove('show');
+  $('promo').classList.remove('show'); $('docCard').classList.remove('show'); $('docToast').classList.remove('show'); $('combo').classList.remove('show');
   clearTimeout(cutT); $('cutin').classList.add('hidden'); $('cutin').classList.remove('on');
   goTitle();
 }
@@ -3362,7 +3374,7 @@ document.addEventListener('pointerdown', () => { lastInput = performance.now(); 
 /* ============ 시작 ============ */
 resize(); newGame(); goTitle();
 if (demoHash) startDemo();
-window.__incheon = { V3, get G() { return G; }, startGame, showResult, Brief, startStage, S1, S2, S3, startDemo, endDemo, award, startFever };
+window.__incheon = { V3, get G() { return G; }, startGame, showResult, Brief, startStage, S1, S2, S3, startDemo, endDemo, award, startFever, gotDoc };
 requestAnimationFrame(frame);
 })();
 </script>
