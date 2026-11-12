@@ -1507,25 +1507,36 @@ const S2 = {
   intro: ['작전 2 · 월미도 상륙', '물이 7m를 넘으면 갯벌을 지나 해변까지 갈 수 있다'],
   beachY() { return H * 0.27; }, flatY() { return H * 0.66; }, startY() { return H * 0.86; },
   laneX(i) { return W * (0.3 + 0.2 * i); },
+  batPos(b) { return b.row ? [this.laneX(b.lane) + (b.lane === 1 ? 64 : b.lane === 0 ? -58 : 58) * U, this.beachY() - 98 * U] : [this.laneX(b.lane), this.beachY() - 46 * U]; },
+  shipX(i) { return W * (0.12 + i * 0.26) + 30 * U; },
   init() {
     const by = this.beachY();
-    G.s2 = { t: 0, boats: [], left: this.BOATS, bats: [0, 1, 2].map(i => ({ lane: i, st: 'idle', tm: rand(3, 5), dead: false, flash: 0 })), shells: [], laneCd: [0, 0, 0], navalCd: 0, men: [], warned: false,
+    G.s2 = { t: 0, boats: [], left: this.BOATS, bats: [0, 1, 2, 0, 1, 2].map((l, i) => ({ lane: l, row: i < 3 ? 0 : 1, st: 'idle', tm: i < 3 ? rand(3, 5) : rand(5.5, 8), dead: false, flash: 0 })), air: { left: 2, cd: 0 }, lsmr: [], lsmrT: 0.6, lsmrN: 0, efT: 2.2, efire: [], raidN: 0, shells: [], laneCd: [0, 0, 0], navalCd: 0, men: [], warned: false,
       fleetT: 1, planeT: 2.5, planes: [], vfx: [], flashes: [], fires: [], salvoT: 4, salvo: [], salvoN: 0, doc: null, docT: rand(5, 8) };
     for (let i = 0; i < 5; i++) { let x, y, n = 0; do { x = rand(W * 0.06, W * 0.94); y = rand(by * 0.3, by * 0.8); n++; } while (n < 30 && [0, 1, 2].some(j => Math.abs(x - this.laneX(j)) < 70 * U)); G.s2.fires.push({ x, y }); }
     G.wind = 14;
   },
   start() {
-    actButton(false);
+    this.airBtn();
     cutin(SVG_MAC, '유엔군 사령관 맥아더', '상륙하라!', '밀물이 차오른다. 월미도부터 손에 넣어라!', '사진: 1950년 9월 15일, 지휘함 마운트매킨리호에서 인천을 지켜보는 맥아더 (미국 국립기록원, 퍼블릭 도메인)', { img: 'macarthur', cap: '1950. 9. 15. 지휘함에서 상륙을 지켜보는 맥아더(가운데)' });
-    setTimeout(() => { if (G.state === 'play' && G.stage === 1) hint('🚤 바다를 눌러 상륙정 출발 · 💥 빨갛게 깜빡이는 해안포를 눌러 함포 지원', 4200); }, 2800);
+    setTimeout(() => { if (G.state === 'play' && G.stage === 1) hint('🚤 바다를 눌러 상륙정 출발 · 💥 빨갛게 깜빡이는 해안포를 눌러 함포 지원 · ✈ 버튼으로 항공 폭격', 4600); }, 2800);
   },
   L(t) { const p = t / this.T; return 2.2 + 7 * Math.exp(-Math.pow((p - 0.42) / 0.27, 2)); },
   tide() { return this.L(G.s2 ? G.s2.t : 0); },
   waterY() { const L = this.tide(); return this.beachY() + clamp((7 - L) / 5, 0, 1) * (this.flatY() - this.beachY()); },
   timeLeft() { return this.T - G.s2.t; },
   goal() { return ['상륙 성공', G.stat.land + ' / ' + this.GOAL]; },
-  act() {},
-  key(k) { if (k === 'Digit1' || k === 'Digit2' || k === 'Digit3') this.launch(+k.slice(-1) - 1); },
+  airBtn() { const a = G.s2.air; actButton(a.left > 0, '✈', a.cd > 0 ? '폭격기 준비 중' : '항공 폭격 ×' + a.left); },
+  act() {   // 항공 폭격: 해안포 2곳을 골라 함재기 4대가 폭탄을 떨어뜨림
+    const s = G.s2, a = s.air; if (a.left <= 0 || a.cd > 0) { Snd.dry(); return; }
+    const alive = s.bats.filter(b => !b.dead && !b.raid); if (!alive.length) { Snd.dry(); hint('남은 해안포가 없어요!'); return; }
+    alive.sort((p, q) => (q.st === 'aim') - (p.st === 'aim') || p.tm - q.tm); const tg = alive.slice(0, 2); tg.forEach(b => b.raid = true);
+    a.left--; a.cd = 6; s.raidN++;
+    tg.forEach((b, j) => { const [x, y] = this.batPos(b); for (const o of [-26, 26]) s.planes.push({ x: x + o * U, y: H + (90 + j * 70) * U, fired: false, raid: b, tx: x, ty: y }); });
+    Snd.plane(); this.airBtn();
+    if (s.raidN === 1) hint('✈ 항공모함에서 뜬 F4U 콜세어가 해안 진지를 폭격해요', 3200);
+  },
+  key(k) { if (k === 'Digit1' || k === 'Digit2' || k === 'Digit3') this.launch(+k.slice(-1) - 1); if (k === 'Space' || k === 'KeyA') this.act(); },
   launch(i) {
     const s = G.s2;
     if (s.laneCd[i] > 0) return;
@@ -1537,7 +1548,7 @@ const S2 = {
     const s = G.s2;
     if (b.dead) return;
     if (s.navalCd > 0) { Snd.dry(); return; }
-    const fx = W * (0.12 + Math.floor(Math.random() * 4) * 0.26) + 30 * U;
+    const fx = this.shipX(Math.floor(Math.random() * 4));
     s.navalCd = 0.9; s.shells.push({ b, t: 0.55, x0: fx, y0: H * 0.93, j: b.st === 'aim' ? 'PERFECT' : 'GREAT' });
     s.flashes.push({ x: fx, y: H * 0.93, t: 0 });
     Snd.cannon(0, 0.8);
@@ -1545,7 +1556,7 @@ const S2 = {
   down(p) {
     const s = G.s2, by = this.beachY();
     if (s.doc && !G.docs[1] && hyp(p.x - s.doc.x, p.y - s.doc.y) < 60 * U) { gotDoc(1, s.doc.x, s.doc.y); s.doc = null; return; }
-    for (const b of s.bats) { if (!b.dead && hyp(p.x - this.laneX(b.lane), p.y - (by - 46 * U)) < 70 * U) { this.strike(b); return; } }
+    { let bb = null, bd = 70 * U; for (const b of s.bats) { if (b.dead) continue; const [bx, byy] = this.batPos(b), d = hyp(p.x - bx, p.y - byy); if (d < bd) { bd = d; bb = b; } } if (bb) { this.strike(bb); return; } }
     if (p.y > by + 20 * U) { let best = 0, bd = 1e9; for (let i = 0; i < 3; i++) { const dd = Math.abs(p.x - this.laneX(i)); if (dd < bd) { bd = dd; best = i; } } this.launch(best); }
   },
   move() {},
@@ -1579,9 +1590,9 @@ const S2 = {
       bt.tm -= dt;
       if (bt.st === 'idle' && bt.tm <= 0) { bt.st = 'aim'; bt.tm = 1.4; Snd.warn(); }
       else if (bt.st === 'aim' && bt.tm <= 0) {
-        bt.st = 'idle'; bt.tm = rand(3.2, 5.5); bt.flash = 0.18;
-        const x = this.laneX(bt.lane);
-        part({ x, y: by - 20 * U, vx: rand(-10, 10) * U, vy: rand(10, 30) * U, life: 0, max: 1.5, size: 12 * U, t: 'smoke' });
+        bt.st = 'idle'; bt.tm = bt.row ? rand(5, 7.5) : rand(3.2, 5.5); bt.flash = 0.18;
+        const x = this.laneX(bt.lane), [px, py] = this.batPos(bt);
+        part({ x: px, y: py + 26 * U, vx: rand(-10, 10) * U, vy: rand(10, 30) * U, life: 0, max: 1.5, size: 12 * U, t: 'smoke' });
         for (let k = 0; k < 3; k++) splash(x + rand(-14, 14) * U, rand(by + 40 * U, H * 0.76), 1);
         Snd.splash();
         for (const b of s.boats) if (b.lane === bt.lane && (b.st === 'go' || b.st === 'stuck') && b.y > by + 20 * U && b.y < H * 0.8) { b.st = 'back'; floater(x, b.y - 20 * U, '물기둥에 밀려 되돌아간다!', '#ffd0a6', 16); breakCombo(x, b.y - 46 * U); }
@@ -1589,7 +1600,7 @@ const S2 = {
     }
     for (const sh of s.shells) {
       sh.t -= dt;
-      if (sh.t <= 0 && !sh.done) { sh.done = true; const b = sh.b; if (!b.dead) { b.dead = true; G.stat.bat++; explode(this.laneX(b.lane), by - 46 * U, 1.2); Snd.boom(true); award(200, this.laneX(b.lane), by - 80 * U, '해안포 제압', sh.j); G.flash = 0.2; } }
+      if (sh.t <= 0 && !sh.done) { sh.done = true; const b = sh.b; if (!b.dead) { b.dead = true; G.stat.bat++; const [px, py] = this.batPos(b); explode(px, py, 1.2); Snd.boom(true); award(200, px, py - 34 * U, '해안포 제압', sh.j); G.flash = 0.2; } }
     }
     s.shells = s.shells.filter(sh => !sh.done);
     for (const m of s.men) { m.life += dt; m.y += m.vy * dt; m.x += m.vx * dt; } s.men = s.men.filter(m => m.life < 1.6);
@@ -1625,17 +1636,31 @@ const S2 = {
       if (!s.doc) { s.docT -= dt; if (s.docT <= 0) { s.doc = { x: rand(W * 0.18, W * 0.82), y: rand(H * 0.7, H * 0.8), t: 0 }; s.docT = 999; } }
       else { s.doc.t += dt; s.doc.x += Math.sin(s.doc.t) * 12 * U * dt; if (s.doc.t > 7) { splash(s.doc.x, s.doc.y, 0.6); s.doc = null; } }
     }
+    s.lsmrT -= dt;
+    if (s.lsmrT <= 0 && s.lsmrN < 2) { s.lsmrN++; s.lsmrT = 13; for (let i = 0; i < 3; i++) for (let j = 0; j < 14; j++) s.lsmr.push({ i, t: -j * 0.11 - i * 0.05 }); if (s.lsmrN === 1) hint('🚀 상륙 직전, 중형 상륙 로켓함 3척이 15분 동안 월미도에 로켓을 퍼부었어요', 3400); }
+    for (const r of s.lsmr) { const was = r.t; r.t += dt; if (was < 0 && r.t >= 0) { const x0 = W * [0.13, 0.4, 0.87][r.i], y0 = H * 0.82; s.vfx.push({ x0, y0, x1: rand(W * 0.06, W * 0.94), y1: rand(by * 0.15, by * 0.85), t: 0, dur: rand(0.8, 1.1), lsmr: true }); if (Math.random() < 0.3) Snd.rocket(); } }
+    s.lsmr = s.lsmr.filter(r => r.t < 0);
+    s.efT -= dt;
+    if (s.efT <= 0) { s.efT = rand(1.6, 3); const al = s.bats.filter(b => !b.dead && b.st === 'idle'); if (al.length) { const b = al[Math.random() * al.length | 0], [x0, y0] = this.batPos(b), i = Math.random() * 4 | 0; b.flash = 0.15; s.vfx.push({ x0, y0, x1: this.shipX(i) + rand(-50, 50) * U, y1: H * 0.93 + rand(-30, 10) * U, t: 0, dur: 1.1, enemy: true, ship: i }); } }
+    s.air.cd = Math.max(0, s.air.cd - dt); if (G.time % 0.25 < dt) this.airBtn();
     s.planeT -= dt;
-    if (s.planeT <= 0) { s.planeT = rand(5, 8); s.planes.push({ x: rand(W * 0.15, W * 0.85), y: H + 80 * U, fired: false }); Snd.plane(); }
+    if (s.planeT <= 0) { s.planeT = rand(3, 5); s.planes.push({ x: rand(W * 0.15, W * 0.85), y: H + 80 * U, fired: false }); Snd.plane(); }
     for (const p of s.planes) {
       p.y -= H / 2.3 * dt;
+      if (p.raid) { p.y -= H / 2.3 * dt * 0.15; if (!p.fired && p.y < p.ty + 150 * U) { p.fired = true; s.vfx.push({ x0: p.x, y0: p.y, x1: p.tx + rand(-14, 14) * U, y1: p.ty + rand(-8, 8) * U, t: 0, dur: 0.55, bomb: p.raid }); Snd.rocket(); } continue; }
       if (!p.fired && p.y < by + 170 * U) { p.fired = true; for (const o of [-12, 12]) s.vfx.push({ x0: p.x + o * U, y0: p.y, x1: p.x + o * 3 * U + rand(-20, 20) * U, y1: rand(by * 0.25, by * 0.75), t: 0, dur: 0.45, rocket: true }); Snd.rocket(); }
     }
     s.planes = s.planes.filter(p => p.y > -140 * U);
-    for (const v of s.vfx) { v.t += dt; if (v.rocket && Math.random() < 0.6) { const k = v.t / v.dur; part({ x: v.x0 + (v.x1 - v.x0) * k, y: v.y0 + (v.y1 - v.y0) * k, vx: 0, vy: 0, life: 0, max: 0.8, size: 4 * U, t: 'smoke' }); } if (v.t >= v.dur && !v.done) { v.done = true; explode(v.x1, v.y1, 0.55, true); Snd.boom(false); } }
+    for (const v of s.vfx) { v.t += dt; if (v.rocket && Math.random() < 0.6) { const k = v.t / v.dur; part({ x: v.x0 + (v.x1 - v.x0) * k, y: v.y0 + (v.y1 - v.y0) * k, vx: 0, vy: 0, life: 0, max: 0.8, size: 4 * U, t: 'smoke' }); } if (v.t >= v.dur && !v.done) { v.done = true; explode(v.x1, v.y1, v.bomb ? 1.3 : 0.55, true); Snd.boom(!!v.bomb);
+        if (v.ship != null) { splash(v.x1, v.y1, 0.9); }
+        if (v.bomb && !v.bomb.dead) { const b = v.bomb; b.dead = true; G.stat.bat++; G.flash = 0.25; G.shake = Math.max(G.shake, 7 * U); award(180, v.x1, v.y1 - 34 * U, '항공 폭격', 'GREAT'); s.fires.push({ x: v.x1 + rand(-20, 20) * U, y: v.y1 + rand(-6, 6) * U }); } } }
     s.vfx = s.vfx.filter(v => !v.done);
     for (const f of s.flashes) f.t += dt; s.flashes = s.flashes.filter(f => f.t < 0.25);
     for (const f of s.fires) if (Math.random() < dt * 5) part({ x: f.x + rand(-6, 6) * U, y: f.y, vx: rand(4, 14) * U, vy: -rand(18, 36) * U, life: 0, max: rand(2.5, 4), size: rand(10, 18) * U, t: 'smoke', dark: true });
+    if (!s.h1 && G.stat.land >= 3) { s.h1 = 1; hint('🛡 전차 상륙! 실제 3제파는 M26 퍼싱 등 전차 10대였어요', 3200); }
+    else if (!s.h2 && G.stat.land >= 5) { s.h2 = 1; hint('🔥 화염방사 전차가 진지 속에서 버티는 북한군을 공격해요', 3000); }
+    else if (!s.h3 && G.stat.land >= 7) { s.h3 = 1; hint('🏳 전의를 잃은 북한군이 투항해요 (실제 포로 136명)', 3000); }
+    else if (!s.h4 && G.stat.land >= 9) { s.h4 = 1; hint('🚩 6시 50분, 해병 G중대 3소대가 월미도 정상에 올랐어요', 3000); }
     if (G.stat.land >= this.GOAL) stageClear(Math.round(this.timeLeft() * 20), '월미도 점령! 남은 시간 보너스 +' + Math.round(this.timeLeft() * 20));
     else if (s.t >= this.T) {
       const stuck = s.boats.filter(b => b.st === 'stuck').length;
@@ -1649,7 +1674,7 @@ const S2 = {
     const g = x.createLinearGradient(0, 0, 0, ih); g.addColorStop(0, '#36502e'); g.addColorStop(1, '#4d683b'); x.fillStyle = g; x.fillRect(0, 0, W, ih);
     for (let i = 0; i < 160; i++) { x.fillStyle = `rgba(${30 + srand() * 50 | 0},${50 + srand() * 40 | 0},${20 + srand() * 20 | 0},.28)`; x.beginPath(); x.ellipse(srand() * W, srand() * ih, (20 + srand() * 50) * U, (10 + srand() * 25) * U, srand() * 3, 0, TAU); x.fill(); }
     x.strokeStyle = 'rgba(205,190,150,.55)'; x.lineWidth = 4 * U; x.beginPath(); x.moveTo(-10, ih * 0.72); x.bezierCurveTo(W * 0.3, ih * 0.45, W * 0.6, ih * 0.92, W + 10, ih * 0.6); x.stroke();
-    const bats = [0, 1, 2].map(i => this.laneX(i)), far = (px, py, r) => bats.every(bx => hyp(px - bx, py - (by - 46 * U)) > r);
+    const bats = G.s2.bats.map(b => this.batPos(b)), far = (px, py, r) => bats.every(([bx, byy]) => hyp(px - bx, py - byy) > r);
     for (let i = 0; i < 16; i++) { const bw = (24 + srand() * 22) * U, bh = (14 + srand() * 12) * U, px = srand() * W, py = ih * (0.15 + srand() * 0.55); if (!far(px, py, 80 * U)) continue; x.fillStyle = 'rgba(0,0,0,.35)'; x.fillRect(px + 4 * U, py + 5 * U, bw, bh); x.fillStyle = srand() > 0.5 ? '#7d6650' : '#6a6c66'; x.fillRect(px, py, bw, bh); x.fillStyle = 'rgba(255,255,255,.14)'; x.fillRect(px, py, bw, bh * 0.45); }
     for (let i = 0; i < 3; i++) { const px = W * (0.83 + i * 0.055), py = ih * (0.3 + (i % 2) * 0.22), r = 15 * U; x.fillStyle = 'rgba(0,0,0,.35)'; x.beginPath(); x.arc(px + 4 * U, py + 5 * U, r, 0, TAU); x.fill(); x.fillStyle = '#b8b6aa'; x.beginPath(); x.arc(px, py, r, 0, TAU); x.fill(); x.strokeStyle = '#8e8c82'; x.lineWidth = 2 * U; x.beginPath(); x.arc(px, py, r * 0.6, 0, TAU); x.stroke(); }
     const n = W * ih / (480 * U * U);
@@ -1703,12 +1728,12 @@ const S2 = {
     ctx.globalCompositeOperation = 'source-over';
     // 해안포
     for (const bt of s.bats) {
-      const x = this.laneX(bt.lane), y = by - 46 * U;
+      const [x, y] = this.batPos(bt);
       if (bt.st === 'aim' && !bt.dead) {
         const a = 0.22 + 0.22 * Math.sin(t * 16);
-        ctx.fillStyle = `rgba(255,60,40,${a})`; ctx.fillRect(x - 26 * U, by + 30 * U, 52 * U, H * 0.78 - by - 30 * U);
+        ctx.fillStyle = `rgba(255,60,40,${a})`; ctx.fillRect(this.laneX(bt.lane) - 26 * U, by + 30 * U, 52 * U, H * 0.78 - by - 30 * U);
         ctx.strokeStyle = `rgba(255,120,100,${0.5 + a})`; ctx.lineWidth = 2 * U;
-        for (let yy = by + 50 * U; yy < H * 0.76; yy += 40 * U) { ctx.beginPath(); ctx.moveTo(x - 12 * U, yy); ctx.lineTo(x, yy + 10 * U); ctx.lineTo(x + 12 * U, yy); ctx.stroke(); }
+        { const lx = this.laneX(bt.lane); for (let yy = by + 50 * U; yy < H * 0.76; yy += 40 * U) { ctx.beginPath(); ctx.moveTo(lx - 12 * U, yy); ctx.lineTo(lx, yy + 10 * U); ctx.lineTo(lx + 12 * U, yy); ctx.stroke(); } }
         ctx.strokeStyle = 'rgba(255,90,70,.95)'; ctx.lineWidth = 3 * U; ctx.beginPath(); ctx.arc(x, y, (36 + Math.sin(t * 12) * 4) * U, 0, TAU); ctx.stroke();
         ctx.font = `900 ${22 * U}px sans-serif`; ctx.textAlign = 'center'; ctx.fillStyle = '#ff5a4a'; ctx.fillText('!', x, y - 44 * U);
       }
@@ -2290,16 +2315,16 @@ vec3 skyFull(vec3 d){ vec3 c = skyBase(d); float m = max(dot(d, sDir), 0.0);
     const tex = new T.CanvasTexture(normTex); tex.wrapS = tex.wrapT = T.RepeatWrapping;
     const sh = o.shore || [0, 1, 0, 0], u = Object.assign({ uT: { value: 0 }, uC: { value: new T.Vector2() }, uLv: { value: 0 }, uAmp: { value: o.amp }, uW: { value: ws.map(w => new T.Vector4(w[0], w[1], w[2], w[3])) }, uPh: { value: ws.map(w => w[4]) },
       uDeep: { value: new T.Color(o.deep) }, uShal: { value: new T.Color(o.shal) }, uFog: { value: new T.Color(o.fog) }, uFogD: { value: o.fogD }, uShore: { value: new T.Vector4(sh[0], sh[1], sh[2], sh[3]) }, uAlpha: { value: o.alpha == null ? 1 : o.alpha }, uNorm: { value: tex },
-      uLP: { value: [0, 1, 2, 3].map(() => new T.Vector4(0, -999, 0, 1)) }, uLC: { value: [0, 1, 2, 3].map(() => new T.Color(0)) }, uBA: { value: new T.Vector4(0, 0, 0, 2) }, uBD: { value: new T.Vector3(0, -1, 0) }, uBC: { value: new T.Color(0) }, uFoam: { value: o.foam == null ? 0.6 : o.foam }, uFoamC: { value: o.foamC == null ? 1 : o.foamC } }, o.su);
-    const HEAD = 'uniform float uT; uniform vec2 uC; uniform float uLv; uniform float uAmp; uniform vec4 uW[5]; uniform float uPh[5]; uniform vec4 uShore;\nvarying vec3 vP; varying float vH; varying float vDp;\nfloat depthAt(vec2 p){ if (uShore.x > 0.5 && uShore.x < 1.5) { float g = p.y >= 0.0 ? -p.y / uShore.y * 2.5 : min(2.0, -p.y * 0.42); return uLv - g; } if (uShore.x > 1.5) return -p.x * 0.6; return 50.0; }\n';
+      uLP: { value: [0, 1, 2, 3].map(() => new T.Vector4(0, -999, 0, 1)) }, uLC: { value: [0, 1, 2, 3].map(() => new T.Color(0)) }, uBA: { value: new T.Vector4(0, 0, 0, 2) }, uBD: { value: new T.Vector3(0, -1, 0) }, uBC: { value: new T.Color(0) }, uFoam: { value: o.foam == null ? 0.6 : o.foam }, uFoamC: { value: o.foamC == null ? 1 : o.foamC }, uSw: { value: new T.Vector4(0, 0, 0, 0) }, uSd: { value: new T.Vector2(0.03, 0) }, uHB: { value: [0, 1, 2].map(() => new T.Vector4(1e5, 1e5, 1, 1)) } }, o.su);
+    const HEAD = 'uniform float uT; uniform vec2 uC; uniform float uLv; uniform float uAmp; uniform vec4 uW[5]; uniform float uPh[5]; uniform vec4 uShore; uniform vec4 uSw; uniform vec2 uSd;\nfloat swl(vec2 p){ float t = uSw.w - dot(p - uSw.xy, uSd); return uSw.z * (0.6 * sin(2.1 * t) + 0.4 * sin(3.3 * t + 1.3)); }\nvec2 swg(vec2 p){ float t = uSw.w - dot(p - uSw.xy, uSd); return -uSd * uSw.z * (1.26 * cos(2.1 * t) + 1.32 * cos(3.3 * t + 1.3)); }\nvarying vec3 vP; varying float vH; varying float vDp;\nfloat depthAt(vec2 p){ if (uShore.x > 0.5 && uShore.x < 1.5) { float g = p.y >= 0.0 ? -p.y / uShore.y * 2.5 : min(2.0, -p.y * 0.42); return uLv - g; } if (uShore.x > 1.5) return -p.x * 0.6; return 50.0; }\n';
     const m = new T.ShaderMaterial({ uniforms: u, transparent: (o.alpha == null ? 1 : o.alpha) < 1, fog: false,
-      vertexShader: HEAD + 'void main(){ vec2 p = position.xz + uC; float dp = depthAt(p); float at = uAmp * smoothstep(0.0, 2.2, dp); float h = 0.0; for (int i = 0; i < 5; i++) h += uW[i].z * sin(dot(uW[i].xy, p) + uW[i].w * uT + uPh[i]); vH = h; vDp = dp; vP = vec3(p.x, uLv + h * at, p.y); gl_Position = projectionMatrix * viewMatrix * vec4(vP, 1.0); }',
-      fragmentShader: HEAD + SKYFN + `uniform vec3 uDeep; uniform vec3 uShal; uniform vec3 uFog; uniform float uFogD; uniform float uAlpha; uniform sampler2D uNorm; uniform vec4 uLP[4]; uniform vec3 uLC[4]; uniform vec4 uBA; uniform vec3 uBD; uniform vec3 uBC; uniform float uFoam; uniform float uFoamC;
+      vertexShader: HEAD + 'void main(){ vec2 p = position.xz + uC; float dp = depthAt(p); float at = uAmp * smoothstep(0.0, 2.2, dp); float h = 0.0; for (int i = 0; i < 5; i++) h += uW[i].z * sin(dot(uW[i].xy, p) + uW[i].w * uT + uPh[i]); vH = h; vDp = dp; vP = vec3(p.x, uLv + h * at + swl(p), p.y); gl_Position = projectionMatrix * viewMatrix * vec4(vP, 1.0); }',
+      fragmentShader: HEAD + SKYFN + `uniform vec3 uDeep; uniform vec3 uShal; uniform vec3 uFog; uniform float uFogD; uniform float uAlpha; uniform sampler2D uNorm; uniform vec4 uLP[4]; uniform vec3 uLC[4]; uniform vec4 uBA; uniform vec3 uBD; uniform vec3 uBC; uniform float uFoam; uniform float uFoamC; uniform vec4 uHB[3];
 void main(){
   vec2 p = vP.xz; float at = uAmp * smoothstep(0.0, 2.2, vDp);
   vec2 g = vec2(0.0); for (int i = 0; i < 5; i++) g += uW[i].xy * (uW[i].z * cos(dot(uW[i].xy, p) + uW[i].w * uT + uPh[i]));
   vec3 d1 = texture2D(uNorm, p * 0.031 + vec2(uT * 0.011, uT * 0.017)).xyz * 2.0 - 1.0; vec3 d2 = texture2D(uNorm, p * 0.093 - vec2(uT * 0.02, -uT * 0.013)).xyz * 2.0 - 1.0;
-  vec3 N = normalize(vec3(-g.x * at - (d1.x + d2.x * 0.6) * 0.15, 1.0, -g.y * at - (d1.y + d2.y * 0.6) * 0.15));
+  vec2 sg = swg(p); vec3 N = normalize(vec3(-g.x * at - sg.x - (d1.x + d2.x * 0.6) * 0.15, 1.0, -g.y * at - sg.y - (d1.y + d2.y * 0.6) * 0.15));
   vec3 V = cameraPosition - vP; float dist = length(V); V /= dist;
   float fr = 0.03 + 0.97 * pow(1.0 - max(dot(N, V), 0.0), 5.0);
   vec3 Rr = reflect(-V, N); Rr.y = abs(Rr.y) + 0.02; Rr = normalize(Rr);
@@ -2310,6 +2335,7 @@ void main(){
   { vec3 q = vP - uBA.xyz; float d = length(q); float c = dot(q / max(d, 0.001), uBD); float lit = smoothstep(uBA.w, mix(uBA.w, 1.0, 0.45), c); col += uBC * lit * (0.05 + 0.3 * max(d1.x + d2.y, 0.0)); }
   float fm = smoothstep(uFoam, uFoam + 0.45, vH + (d1.x + d2.y) * 0.22) * clamp(at / max(uAmp, 0.001), 0.0, 1.0);
   fm = max(fm, (1.0 - smoothstep(0.0, 0.55, vDp)) * (0.55 + 0.45 * sin(vDp * 9.0 - uT * 2.0 + d1.x * 3.0)));
+  for (int i = 0; i < 3; i++) { vec2 q = abs(p - uHB[i].xy) - uHB[i].zw; float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0); fm = max(fm, (1.0 - smoothstep(0.0, 2.6, d)) * step(-0.2, d) * (0.45 + 0.4 * sin(d * 4.0 - uT * 3.0 + d1.x * 4.0) + 0.3 * d2.y)); }
   fm = clamp(fm, 0.0, 1.0);
   col = mix(col, vec3(0.9, 0.95, 1.0) * uFoamC, fm * 0.85);
   col = mix(col, uFog, 1.0 - exp(-pow(dist * uFogD, 2.0)));
@@ -2318,10 +2344,13 @@ void main(){
 }` });
     const mesh = new T.Mesh(g, m); mesh.frustumCulled = false; mesh.renderOrder = 1;
     const dep = (x, z, lv) => sh[0] === 1 ? lv - (z >= 0 ? -z / sh[1] * 2.5 : Math.min(2, -z * 0.42)) : sh[0] === 2 ? -x * 0.6 : 50;
-    let T0 = 0, LV = 0;
+    let T0 = 0, LV = 0; const swl = (x, z) => { const S = u.uSw.value, D = u.uSd.value, t = S.w - ((x - S.x) * D.x + (z - S.y) * D.y); return S.z * (0.6 * Math.sin(2.1 * t) + 0.4 * Math.sin(3.3 * t + 1.3)); };
     return { mesh,
       tick(t, cx, cz, lv) { T0 = t; LV = lv; u.uT.value = t; u.uC.value.set(Math.round(cx / 4) * 4, Math.round(cz / 4) * 4); u.uLv.value = lv; },
-      h(x, z) { let h = 0; for (const w of ws) h += w[2] * Math.sin(w[0] * x + w[1] * z + w[3] * T0 + w[4]); return LV + h * o.amp * clamp(dep(x, z, LV) / 2.2, 0, 1); },
+      h(x, z) { let h = 0; for (const w of ws) h += w[2] * Math.sin(w[0] * x + w[1] * z + w[3] * T0 + w[4]); return LV + h * o.amp * clamp(dep(x, z, LV) / 2.2, 0, 1) + swl(x, z); },
+      sw(x, z) { return LV + swl(x, z); },
+      swell(cx, cz, A, tb, dx, dz) { u.uSw.value.set(cx, cz, A, tb); u.uSd.value.set(dx, dz); },
+      hulls(list) { u.uHB.value.forEach((v, i) => { const b = list[i]; b ? v.set(b[0], b[1], b[2], b[3]) : v.set(1e5, 1e5, 1, 1); }); },
       light(i, x, y, z, r, col, k) { u.uLP.value[i].set(x, y, z, Math.max(1, r)); u.uLC.value[i].set(col).multiplyScalar(k); },
       beam(apex, to, col, k, cosO) { u.uBA.value.set(apex.x, apex.y, apex.z, cosO); u.uBD.value.copy(to).sub(apex).normalize(); u.uBC.value.set(col).multiplyScalar(k); } };
   }
@@ -2403,20 +2432,69 @@ void main(){ vec3 m0 = vec3(0.0), m1 = vec3(0.0), m2 = vec3(0.0), m3 = vec3(0.0)
     const g = new T.PlaneGeometry(wid, len); g.rotateX(-Math.PI / 2); g.rotateY(-Math.PI / 2); g.translate(-len / 2, 0, 0);
     const o = new T.Mesh(g, new T.MeshBasicMaterial({ map: wakeT, transparent: true, opacity: 0.6, depthWrite: false })); o.position.y = 0.07; return o;
   }
-  function lcvp() {   // 상륙정 (뱃머리가 +X)
-    const g = new T.Group(), hm = M(0x66735a), dm = M(0x2f3829);
-    g.add(box(5, 0.9, 2, hm, 0, 0.25, 0)); g.add(box(3.6, 0.08, 1.6, dm, 0.3, 0.73, 0));
-    g.add(box(4.4, 0.75, 0.14, hm, 0, 1.05, 0.93)); g.add(box(4.4, 0.75, 0.14, hm, 0, 1.05, -0.93));
-    const ramp = box(0.14, 1.35, 1.9, M(0x556049), 2.52, 1.0, 0); ramp.rotation.z = -0.1; g.add(ramp);
-    g.add(box(1.1, 0.95, 2, hm, -1.95, 1.1, 0)); g.add(box(0.5, 0.5, 0.6, dm, -1.9, 1.8, 0));
-    const tr = new T.Group(), hel = new T.SphereGeometry(0.21, 7, 5), hmat = M(0x2a351f), bm = M(0x3c4a30);
-    for (let i = 0; i < 4; i++) for (const z of [-0.42, 0.42]) { const x = -0.9 + i * 0.75; tr.add(mesh(new T.BoxGeometry(0.34, 0.5, 0.34), bm, x, 0.98, z)); tr.add(mesh(hel, hmat, x, 1.36, z)); }
+  let lcvpTex = null, lcvpGeo = null;
+  function lcvp() {   // 상륙정 LCVP (1950년 미 해군형: 회색 합판 선체, 앞쪽 철판 램프, 뒤쪽 조타석·기관총 2정) — 뱃머리 +X, 물높이 y=0, 길이 5
+    lcvpTex = lcvpTex || cvTex(512, 128, (x, w, h) => {   // 옆판: 회색 칠 + 녹물 자국 + 물에 젖은 띠 + 흘수선 아래 방오 도료
+      seed = 77; x.fillStyle = '#8b959a'; x.fillRect(0, 0, w, h);
+      for (let i = 0; i < 90; i++) { x.fillStyle = `rgba(${srand() < 0.5 ? '60,66,70' : '170,176,180'},${0.05 + srand() * 0.08})`; x.fillRect(srand() * w, srand() * h, 8 + srand() * 40, 3 + srand() * 10); }
+      for (let i = 0; i < 46; i++) { const px = srand() * w, len = 10 + srand() * 60, g = x.createLinearGradient(0, 4, 0, 4 + len); g.addColorStop(0, 'rgba(110,70,45,.45)'); g.addColorStop(1, 'rgba(110,70,45,0)'); x.fillStyle = g; x.fillRect(px, 4, 1.5 + srand() * 2.5, len); }
+      for (let px = 0; px < w; px += 32) { x.fillStyle = 'rgba(40,46,50,.25)'; x.fillRect(px, 0, 1.5, h); }   // 판자 이음매
+      const wl = h * (1 - 0.225), g = x.createLinearGradient(0, wl - 22, 0, wl); g.addColorStop(0, 'rgba(30,40,40,0)'); g.addColorStop(1, 'rgba(30,40,40,.55)'); x.fillStyle = g; x.fillRect(0, wl - 22, w, 22);
+      x.fillStyle = '#26282a'; x.fillRect(0, wl - 2, w, 7); x.fillStyle = '#4a2c26'; x.fillRect(0, wl + 5, w, h);
+      x.fillStyle = 'rgba(30,34,36,.6)'; x.fillRect(0, 0, w, 4);
+    });
+    if (!lcvpGeo) {
+      const s = new T.Shape(); s.moveTo(-0.8, 0.04); s.lineTo(-0.8, -0.18); s.lineTo(-0.6, -0.33); s.lineTo(0.6, -0.33); s.lineTo(0.8, -0.18); s.lineTo(0.8, 0.04); s.lineTo(-0.8, 0.04);
+      const lg = new T.ExtrudeGeometry(s, { depth: 4.75, bevelEnabled: false }); lg.rotateY(Math.PI / 2); lg.translate(-2.5, 0, 0);
+      lcvpGeo = { lower: lg, helm: new T.SphereGeometry(0.068, 8, 5, 0, TAU, 0, Math.PI / 2), head: new T.SphereGeometry(0.05, 7, 5), brim: new T.CylinderGeometry(0.08, 0.08, 0.012, 10), bx: new T.BoxGeometry(1, 1, 1) };
+    }
+    const g = new T.Group(), hm = M(0x7d878c), side = new T.MeshStandardMaterial({ map: lcvpTex, roughness: 0.85, flatShading: true }), dk = M(0x33393c), fl = M(0x55595a), af = M(0x45302a), ram = M(0x707a7f, { metalness: 0.35, roughness: 0.6 });
+    g.add(mesh(lcvpGeo.lower, af));
+    for (const sg of [-1, 1]) {
+      g.add(mesh(new T.BoxGeometry(4.75, 0.8, 0.06), [hm, hm, hm, hm, side, side], -0.125, 0.22, sg * 0.77));   // 옆판
+      g.add(box(4.8, 0.04, 0.13, dk, -0.125, 0.64, sg * 0.77));     // 뱃전 덮개
+      g.add(box(4.7, 0.05, 0.035, dk, -0.125, 0.36, sg * 0.815));   // 덧댄 띠
+      for (let x = -1.35; x < 2.1; x += 0.46) g.add(box(0.04, 0.54, 0.05, hm, x, 0.33, sg * 0.725));   // 안쪽 늑골
+      for (const x of [-2.25, -0.4, 1.9]) g.add(box(0.12, 0.035, 0.05, dk, x, 0.675, sg * 0.77));    // 계선 고리
+      g.add(box(0.09, 0.9, 0.1, hm, 2.2, 0.22, sg * 0.79));        // 램프 기둥
+      const cb = cyl(0.008, 0.008, 3.95, dk, 0.3, 0.74, sg * 0.69, 4); cb.rotation.z = Math.PI / 2; g.add(cb);   // 램프를 올리는 줄
+      // 30구경 기관총
+      g.add(cyl(0.018, 0.018, 0.22, dk, -2.12, 0.57, sg * 0.6, 6)); g.add(box(0.14, 0.06, 0.05, dk, -2.08, 0.69, sg * 0.6));
+      const br = cyl(0.022, 0.022, 0.3, dk, -1.88, 0.71, sg * 0.6, 6); br.rotation.z = Math.PI / 2 - 0.12; g.add(br);
+    }
+    g.add(box(3.85, 0.04, 1.48, fl, 0.3, 0.06, 0));       // 바닥
+    for (let x = -1.5; x < 2.2; x += 0.3) g.add(box(0.03, 0.012, 1.44, dk, x, 0.085, 0));   // 미끄럼 방지 띠
+    g.add(mesh(new T.BoxGeometry(0.06, 0.82, 1.6), [side, side, hm, hm, hm, hm], -2.47, 0.23, 0));      // 고물판
+    g.add(box(0.85, 0.06, 1.48, hm, -2.05, 0.45, 0));     // 뒤 갑판(기관실 덮개)
+    g.add(box(0.05, 0.42, 1.48, hm, -1.62, 0.25, 0));     // 칸막이
+    g.add(box(0.3, 0.05, 0.4, dk, -2.0, 0.49, 0.2));      // 기관실 뚜껑
+    g.add(box(0.12, 0.12, 0.5, dk, -1.7, 0.53, 0));       // 램프 감는 장치
+    g.add(cyl(0.03, 0.03, 0.24, dk, -2.36, 0.57, 0.5, 6)); // 배기관
+    g.add(box(0.05, 0.3, 0.44, ram, -1.76, 0.62, -0.32)); // 조타석 방탄판
+    { const c = new T.Group(), nm = M(0x3f4d63); c.add(box(0.12, 0.2, 0.16, nm, 0, 0.6, 0)); c.add(mesh(lcvpGeo.head, M(0x9a7a5f), 0, 0.76, 0)); c.add(mesh(lcvpGeo.helm, M(0x4b5560), 0, 0.775, 0)); c.position.set(-1.98, 0, -0.32); g.add(c); }   // 조타수
+    // 램프: 아래가 경첩, 위가 앞으로 약간 기울어짐
+    const rg = new T.Group(); rg.position.set(2.25, -0.26, 0); rg.rotation.z = -0.13;
+    rg.add(box(0.06, 0.94, 1.6, ram, 0.03, 0.47, 0)); for (const y of [0.16, 0.36, 0.56, 0.76]) rg.add(box(0.035, 0.035, 1.52, ram, 0.075, y, 0));
+    for (const z of [-0.78, 0.78]) rg.add(box(0.045, 0.92, 0.045, ram, 0.07, 0.47, z)); rg.add(box(0.11, 0.045, 1.6, dk, 0.02, 0.94, 0)); g.add(rg);
+    // 배 안으로 바닷물이 비치지 않게 하는 보이지 않는 덮개 (물보다 먼저 깊이만 씀)
+    const mk = new T.Mesh(new T.PlaneGeometry(3.9, 1.5), new T.MeshBasicMaterial({ colorWrite: false })); mk.rotation.x = -Math.PI / 2; mk.position.set(0.3, 0.6, 0); mk.renderOrder = 0.5; g.add(mk);
+    // 병사들 (철모·배낭·소총) — 한 종류씩 묶어 그림
+    const tr = new T.Group(), list = []; seed = 31;
+    for (let r = 0; r < 7; r++) for (const z of [-0.46, 0, 0.46]) list.push([-1.3 + r * 0.52 + (srand() - 0.5) * 0.12, z + (srand() - 0.5) * 0.1, (srand() - 0.5) * 0.5, 1.12 + srand() * 0.12]);
+    const parts = [[lcvpGeo.bx, 0x3f4430, 0, 0.13, 0, 0.12, 0.26, 0.17, 0], [lcvpGeo.bx, 0x515a3a, 0, 0.38, 0, 0.13, 0.25, 0.21, 0], [lcvpGeo.bx, 0x5c5b40, -0.1, 0.41, 0, 0.08, 0.17, 0.16, 0],
+      [lcvpGeo.head, 0x9a7a5f, 0.005, 0.545, 0, 1, 1, 1, 0], [lcvpGeo.helm, 0x47513a, 0, 0.565, 0, 1, 0.85, 1, 0], [lcvpGeo.brim, 0x47513a, 0, 0.567, 0, 1, 1, 1, 0], [lcvpGeo.bx, 0x2a2620, 0.06, 0.52, 0.08, 0.018, 0.36, 0.018, -0.25]];
+    const m4 = new T.Matrix4(), p4 = new T.Matrix4(), qa = new T.Quaternion(), e3 = new T.Euler(), v1 = new T.Vector3(), v2 = new T.Vector3();
+    for (const [geo, col, px, py, pz, sx, sy, sz, rz] of parts) {
+      const im = new T.InstancedMesh(geo, M(col), list.length); im.castShadow = true;
+      list.forEach(([x, z, yaw, sc], i) => { m4.compose(v1.set(x, 0.08, z), qa.setFromEuler(e3.set(0, yaw, 0)), v2.set(sc, sc, sc)); p4.compose(v1.set(px, py, pz), qa.setFromEuler(e3.set(0, 0, rz)), v2.set(sx, sy, sz)); im.setMatrixAt(i, m4.multiply(p4)); });
+      tr.add(im);
+    }
     g.add(tr); g.userData.troops = tr; return g;
   }
   function soldier(col) {
     const g = new T.Group(), bm = M(col || 0x3a4630), hm = M(0x25301c);
     g.add(cyl(0.26, 0.3, 1.0, bm, 0, 1.15, 0, 7)); g.add(box(0.22, 0.7, 0.26, bm, 0, 0.35, 0.14)); g.add(box(0.22, 0.7, 0.26, bm, 0, 0.35, -0.14));
-    g.add(mesh(new T.SphereGeometry(0.2, 7, 6), M(0x9a7a5f), 0, 1.82, 0)); const h = mesh(new T.SphereGeometry(0.27, 8, 5, 0, TAU, 0, Math.PI / 2), hm, 0, 1.84, 0); g.add(h);
+    g.add(mesh(new T.SphereGeometry(0.2, 7, 6), M(0x9a7a5f), 0, 1.82, 0)); const h = mesh(new T.SphereGeometry(0.27, 8, 5, 0, TAU, 0, Math.PI / 2), hm, 0, 1.84, 0); g.add(h); g.add(cyl(0.34, 0.34, 0.04, hm, 0, 1.85, 0, 10)); g.add(box(0.26, 0.5, 0.42, M(0x55553c), -0.3, 1.25, 0)); g.add(box(0.14, 0.62, 0.14, bm, 0.12, 1.2, 0.33)); g.add(box(0.14, 0.62, 0.14, bm, 0.12, 1.2, -0.33));
     const r = box(0.07, 1.3, 0.07, M(0x1b1a18), 0.2, 1.5, 0.3); r.rotation.z = -0.25; g.add(r); return g;
   }
   function plane() {
@@ -2545,28 +2623,81 @@ void main(){ vec3 m0 = vec3(0.0), m1 = vec3(0.0), m2 = vec3(0.0), m3 = vec3(0.0)
     const sea = C.sea = C.oc({ deep: 0x0c4658, shal: 0x3aa79a, amp: 0.5, wind: -1.5, alpha: 0.9, shore: [1, Zf, 0, 0], foam: 0.72, foamC: 1.1 }); sc.add(sea.mesh);
     const foam = new T.Mesh(new T.PlaneGeometry(HW * 3.4, 1.5).rotateX(-Math.PI / 2), new T.MeshBasicMaterial({ color: 0xf4fbff, transparent: true, opacity: 0.6, depthWrite: false })), foam2 = new T.Mesh(foam.geometry, new T.MeshBasicMaterial({ color: 0xf4fbff, transparent: true, opacity: 0.28, depthWrite: false }));
     // 나무·건물·기름 탱크
-    seed = 7; const bx = [0, 1, 2].map(LX), farB = (x, z, r) => bx.every(b => Math.hypot(x - b, z + 4.6) > r);
+    seed = 7; const bxz = s.bats.map(b => { const [px, py] = S2.batPos(b); return [Xw(px), Zw(py) - (b.row ? 7 : 0)]; }), farB = (x, z, r) => bxz.every(b => Math.hypot(x - b[0], z - b[1]) > r);
     const bl = []; for (let i = 0; i < 16; i++) { const w = 2.6 + srand() * 2.6, d = 1.6 + srand() * 1.4, h = 1.3 + srand() * 1.5, x = (srand() - 0.5) * HW * 1.7, z = -11 - srand() * 30; if (!farB(x, z, 9)) continue; const m = box(w, h, d, M(srand() > 0.5 ? 0x8a7058 : 0x74766f), x, gH(x, z) + h / 2 - 0.15, z); m.rotation.y = (srand() - 0.5) * 0.6; sc.add(m); sc.add(box(w * 1.06, 0.18, d * 1.1, M(0x4a4038), x, gH(x, z) + h - 0.1, z)); bl.push([x, z]); }
     for (let i = 0; i < 3; i++) { const x = Xw(W * (0.83 + i * 0.055)), z = Zw((by - 12 * U) * (0.3 + (i % 2) * 0.22)); sc.add(cyl(1.6, 1.6, 1.8, M(0xc2c0b4, { flatShading: false }), x, gH(x, z) + 0.8, z, 14)); bl.push([x, z]); }
     { const L = []; for (let i = 0; i < 900; i++) { const x = (srand() - 0.5) * HW * 3.2, z = -8 - srand() * 150, h = gH(x, z); if (!farB(x, z, 6) || bl.some(b => Math.hypot(x - b[0], z - b[1]) < 3.4)) continue; L.push([x, h, z, 0.7 + srand() * 0.9]); } sc.add(trees(L, 0x2c4726, 0x41622f)); }
     // 해안포
-    const bats = s.bats.map(bt => { const g = new T.Group(), x = LX(bt.lane), y = gH(x, -4.6); g.position.set(x, y, -4.6);
+    const bats = s.bats.map((bt, bi) => { const g = new T.Group(), x = bxz[bi][0], bz = bxz[bi][1], y = gH(x, bz); g.position.set(x, y, bz);
       const sbg = new T.SphereGeometry(0.7, 7, 5), sbm = M(0xa3916a); for (let a = 0; a < 11; a++) { if (a === 3) continue; const an = a / 11 * TAU + 0.2, o = mesh(sbg, sbm, Math.cos(an) * 2.5, 0.3, Math.sin(an) * 1.9); o.scale.set(1.05, 0.6, 0.9); o.rotation.y = -an; g.add(o); }
       const pit = new T.Mesh(new T.CircleGeometry(2.1, 16).rotateX(-Math.PI / 2), new T.MeshBasicMaterial({ color: 0x1d1b18 })); pit.position.y = 0.08; pit.scale.z = 0.75; g.add(pit);
       const gun = new T.Group(), bm = new T.MeshStandardMaterial({ color: 0x2e3230, emissive: 0xff3020, emissiveIntensity: 0, roughness: 0.6 }); gun.add(cyl(0.8, 0.95, 0.7, M(0x5a5e58), 0, 0.5, 0, 10)); const br = cyl(0.17, 0.21, 3.3, bm, 0, 0.85, 1.6, 8); br.rotation.x = Math.PI / 2; gun.add(br); g.add(gun);
-      const len = Zw(H * 0.78) - 3, strip = new T.Mesh(new T.PlaneGeometry(5.2, len).rotateX(-Math.PI / 2), new T.MeshBasicMaterial({ color: 0xff3c28, transparent: true, opacity: 0, depthWrite: false })); strip.position.set(x, 0.2, 3 + len / 2); sc.add(strip);
-      sc.add(g); return { bt, g, gun, bm, strip, pos: V(x, y + 1.2, -4.6) }; });
+      const len = Zw(H * 0.78) - 3, strip = new T.Mesh(new T.PlaneGeometry(5.2, len).rotateX(-Math.PI / 2), new T.MeshBasicMaterial({ color: 0xff3c28, transparent: true, opacity: 0, depthWrite: false })); strip.position.set(LX(bt.lane), 0.2, 3 + len / 2); sc.add(strip);
+      sc.add(g); return { bt, g, gun, bm, strip, pos: V(x, y + 1.2, bz) }; });
+    // ----- 규모 확대: 로켓함 3척 · 해안 참호의 북한군 · 상륙 후 올라오는 전차 -----
+    const lsmrs = [0.13, 0.4, 0.87].map(fx => {   // 로켓 상륙함(LSMR): 회색 선체 + 갑판 위 로켓 발사대
+      const g = new T.Group(), hm = M(0x6f7a80), dk = M(0x3a4246), x = Xw(W * fx), z = Zw(H * 0.82);
+      g.add(box(1.5, 0.7, 7.5, hm, 0, 0.1, 0)); const bw = mesh(new T.ConeGeometry(0.75, 1.6, 4), hm, 0, 0.1, -4.4); bw.rotation.set(-Math.PI / 2, Math.PI / 4, 0); bw.scale.set(1, 1, 0.45); g.add(bw);
+      g.add(box(1.0, 0.9, 1.4, hm, 0, 0.85, 2.2)); g.add(box(0.7, 0.5, 0.8, dk, 0, 1.5, 2.2)); g.add(cyl(0.05, 0.05, 1.8, dk, 0, 2.2, 2.4, 5));
+      for (let r = 0; r < 4; r++) { const rk = box(1.1, 0.35, 0.5, dk, 0, 0.62, -2.4 + r * 0.8); rk.rotation.x = 0.5; g.add(rk); }
+      g.scale.setScalar(1.7); g.position.set(x, 0, z); sc.add(g); return g; });
+    seed = 19;
+    const foes = [], trM = M(0x2a2218), sbM = M(0x9c8a62), sbG = new T.SphereGeometry(0.32, 6, 4);
+    for (let i = 0; i < 46; i++) {   // 해변 뒤 참호선(앞줄)과 언덕 진지(뒷줄)
+      const back = i >= 30, x = back ? (srand() - 0.5) * HW * 1.3 : ((i + 0.5) / 30 - 0.5) * HW * 1.55 + (srand() - 0.5) * 1.5, z = back ? -13 - srand() * 6 : -6.8 - srand() * 1.2;
+      if (!farB(x, z, 3.2)) continue;
+      const y = gH(x, z), m = soldier(0x7d6b45); m.scale.setScalar(0.8); m.position.set(x, y - 0.5, z); m.rotation.y = -Math.PI / 2 + (srand() - 0.5) * 0.5; sc.add(m);
+      if (!back || srand() < 0.5) { sc.add(box(2.2, 0.12, 1.1, trM, x, y + 0.02, z)); for (let k = -1.5; k <= 1.5; k++) { const b = mesh(sbG, sbM, x + k * 0.6, y + 0.22, z + 0.75); b.scale.set(1, 0.6, 0.8); sc.add(b); } }
+      foes.push({ m, x, y: y + 0.9, z, ph: srand() * 9 });
+    }
+    function tank(kind) {   // M26 퍼싱 전차 (화염방사형·불도저형 포함)
+      const g = new T.Group(), od = M(0x4d5636), dk = M(0x262a20);
+      g.add(box(3.4, 0.75, 1.75, od, 0, 0.75, 0)); for (const z of [-0.78, 0.78]) { g.add(box(3.6, 0.6, 0.42, dk, 0, 0.4, z)); for (let k = -1.4; k <= 1.41; k += 0.47) g.add(cyl(0.22, 0.22, 0.44, dk, k, 0.32, z, 8).rotateX(Math.PI / 2)); }
+      const tu = new T.Group(); tu.position.set(-0.2, 1.3, 0); tu.add(box(1.5, 0.5, 1.3, od, 0, 0, 0)); tu.add(box(0.5, 0.42, 1.1, od, -0.85, 0, 0));
+      const gun = cyl(0.07, 0.08, kind === 'flame' ? 1.4 : 2.6, dk, kind === 'flame' ? 1.4 : 2.0, 0.05, 0, 7); gun.rotation.z = Math.PI / 2; tu.add(gun); g.add(tu);
+      g.add(box(0.12, 0.12, 0.12, M(0xd8d0b0), 0.9, 1.15, 0.55));
+      if (kind === 'dozer') { const bl = box(0.18, 0.75, 2.2, M(0x55594a), 2.0, 0.45, 0); bl.rotation.z = 0.15; g.add(bl); }
+      g.rotation.y = Math.PI / 2; g.scale.setScalar(1.1); g.visible = false; sc.add(g); return { g, kind, at: -1 }; }
+    const tanks = ['gun', 'flame', 'dozer', 'gun', 'flame', 'gun'].map(tank), tLane = [1, 0, 2, 1, 2, 0], tNeed = [3, 4, 5, 6, 7, 8];
+    // 투항하는 북한군(두 손을 든 모습, 한 명은 흰 천)
+    const surr = []; for (let i = 0; i < 9; i++) { const m = soldier(0x7d6b45), am = M(0x7d6b45); m.scale.setScalar(0.8); m.children.forEach(c => { if (c.material && c.material.color && c.material.color.getHex() === 0x1b1a18) c.visible = false; }); for (const z of [-0.3, 0.3]) m.add(box(0.13, 0.75, 0.13, am, 0, 2.05, z)); if (i === 4) { m.add(cyl(0.03, 0.03, 2.2, M(0x8a6a40), 0.1, 2.6, 0.3, 5)); const wf = new T.Mesh(new T.PlaneGeometry(0.9, 0.6), new T.MeshBasicMaterial({ color: 0xf2f0e6, side: T.DoubleSide })); wf.position.set(0.1, 3.4, 0.75); wf.rotation.y = Math.PI / 2; m.add(wf); m.userData.wf = wf; } m.visible = false; sc.add(m); surr.push({ m, x: (LX(0) + LX(1)) / 2 - 3 + (i % 5) * 1.5 + (i > 4 ? 0.7 : 0), z0: -9.5 - (i > 4 ? 1.4 : 0) }); }
+    // 월미도 정상의 성조기 (06:50 해병 G중대 3소대)
+    const flagTex = cvTex(96, 52, (x, w, h) => { for (let i = 0; i < 13; i++) { x.fillStyle = i % 2 ? '#f4f1ea' : '#b22234'; x.fillRect(0, i * h / 13, w, h / 13 + 1); } x.fillStyle = '#3c3b6e'; x.fillRect(0, 0, w * 0.42, h * 7 / 13); x.fillStyle = '#fff'; for (let r = 0; r < 4; r++) for (let c = 0; c < 5; c++) x.fillRect(3 + c * 7.5, 3 + r * 6.5, 2, 2); });
+    let topP = [0, -1e9, -30]; for (let z = -16; z > -26; z -= 2) for (let x = -HW * 0.12; x < HW * 0.12; x += 2) { const hh = gH(x, z); if (hh > topP[1]) topP = [x, hh, z]; }
+    const hillF = new T.Group(); hillF.scale.setScalar(2); hillF.add(cyl(0.08, 0.08, 6, M(0xdddddd), 0, 3, 0, 6)); const hf = new T.Mesh(new T.PlaneGeometry(3.2, 1.75), new T.MeshBasicMaterial({ map: flagTex, side: T.DoubleSide })); hf.position.set(1.65, 5, 0); hillF.add(hf); hillF.position.set(topP[0], topP[1], topP[2]); hillF.visible = false; sc.add(hillF);
+    const surrG = () => surr[4].m, flagG = () => hillF;
+    const more = (t, dt) => {
+      // 적 병사: 상륙이 늘고 해안포가 무너질수록 줄어듦(물러나거나 포로가 됨)
+      const deadB = s.bats.filter(b => b.dead).length, f = clamp(1 - G.stat.land / S2.GOAL * 0.85 - deadB * 0.03, 0.08, 1), nv = Math.round(foes.length * f);
+      foes.forEach((o, i) => { o.m.visible = i < nv; });
+      for (let k = 0; k < 3; k++) { const o = foes[(Math.random() * nv) | 0]; if (!o || Math.random() > 0.45) continue; put(C.pb, o.x, o.y + 0.25, o.z + 0.5, 2.2, 255, 230, 150, 1);
+        if (Math.random() < 0.5) { tA.set(o.x, o.y + 0.3, o.z + 0.5); tB.set(o.x + (Math.random() - 0.5) * 6, wY() + 0.2, o.z + 6 + Math.random() * 16); tC.lerpVectors(tA, tB, Math.random()); trail(C.pb, tC, tA, 5, 0.7, 255, 150, 90); } }
+      // 전차: 3·6·9척째 상륙 때 하나씩 해변에 올라와 앞으로 나아감
+      tanks.forEach((o, i) => { const need = tNeed[i]; if (G.stat.land < need) { o.g.visible = false; o.at = -1; return; } if (o.at < 0) o.at = t;
+        const k = Math.min(1, (t - o.at) / 9), x = LX(tLane[i]) + (i < 3 ? -2 : 2), z = -0.4 - k * (i < 3 ? 6.5 : 4); o.g.visible = true; o.g.position.set(x, gH(x, z) + 0.05, z); o.g.rotation.x = Math.sin(t * 9 + i) * 0.01;
+        if (o.kind === 'flame' && (t % 3.2) < 1.0) { for (let j = 0; j < 9; j++) { const p = j / 9 + Math.random() * 0.08, w = 1 + p * 3; put(C.pb, x + (Math.random() - 0.5) * w * 0.5, gH(x, z) + 1.2 + p * 0.6, z - 1.8 - p * 7, 3 + p * 5, 255, 150 - p * 60, 50, 0.85 - p * 0.5); } C.req.push([x, gH(x, z) + 2, z - 4, 2.2, 0xff7a30, 30]); }
+        if (o.kind === 'gun' && (t % 4.1) < 0.12) { put(C.pb, x, gH(x, z) + 1.45, z - 2.6, 7, 255, 230, 160, 1); }
+      });
+      // 적 포탄이 함대 근처에 떨어질 때 물기둥, 함대가 쏠 때 섬광
+      for (const v of s.vfx) if (v.enemy && v.t / v.dur > 0.97) { C.L2W(v.x1, v.y1, tA); for (let j = 0; j < 6; j++) put(C.pa, tA.x + (Math.random() - 0.5) * 1.5, wY() + 0.5 + j * 0.9, tA.z, 4 - j * 0.3, 235, 245, 255, 0.7); }
+      const sv = G.stat.land >= 7; if (sv && surr.st == null) surr.st = t; if (!sv) surr.st = null;
+      surr.forEach((o, i) => { o.m.visible = sv; if (!sv) return; const k = Math.min(1, (t - surr.st) / 10), z = o.z0 + k * 5.5, x = o.x; o.m.position.set(x, gH(x, z) - 0.5 + Math.abs(Math.sin(t * 6 + i)) * 0.05 * (k < 1), z); o.m.rotation.y = Math.PI / 2 + Math.PI; if (o.m.userData.wf) o.m.userData.wf.rotation.x = Math.sin(t * 5) * 0.3; });
+      hillF.visible = G.stat.land >= 9; hf.rotation.y = Math.sin(t * 3) * 0.15;
+      lsmrs.forEach((g, i) => { g.position.y = sea.h(g.position.x, g.position.z) * 0.6; g.rotation.z = Math.sin(t * 1.3 + i) * 0.02; });
+    };
+
     const boats = []; for (let i = 0; i < S2.BOATS; i++) { const b = lcvp(), w = wake(9, 3); w.position.x = -2.2; b.add(w); b.visible = false; sc.add(b); boats.push({ g: b, w }); }
     const men = []; for (let i = 0; i < 60; i++) { const m = soldier(0x3a4a2c); m.scale.setScalar(0.55); m.visible = false; sc.add(m); men.push(m); }
     const flags = []; for (let i = 0; i < S2.GOAL; i++) { const g = new T.Group(), x = Xw(W * 0.12 + i * W * 0.078); g.add(cyl(0.05, 0.05, 2.6, M(0xe8e8e8), 0, 1.3, 0, 5)); const f = new T.Mesh(new T.PlaneGeometry(1.5, 0.9), new T.MeshBasicMaterial({ color: 0xffcf3a, side: T.DoubleSide })); f.position.set(0.78, 2.1, 0); g.add(f); g.position.set(x, gH(x, -1.4), -1.4); g.visible = false; sc.add(g); flags.push({ g, f }); }
     const fleet = [0, 1, 2, 3].map(i => { const o = ship(1.6); o.position.set(Xw(W * (0.12 + i * 0.26)), 0, Zfl); sc.add(o); return o; });
-    const planes = [0, 1, 2].map(() => { const p = plane(); p.scale.setScalar(1.3); p.visible = false; sc.add(p); return p; });
+    const planes = [0, 1, 2, 3, 4, 5, 6, 7].map(() => { const p = plane(); p.scale.setScalar(1.3); p.visible = false; sc.add(p); return p; });
     const docG = spr(0xffe08a, 8, 0); sc.add(docG);
+    C.bpos = bats.map(o => o.pos);
     const shoreZ = y => y <= 0 ? -y / 2.5 * Zf : -y / 0.42;
     C.planar = true;
     C.L2W = (x, y, out) => { const X = Xw(x), Z = Zw(y); return out.set(X, Math.max(wY(), gH(X, Z)), Z); };
     C.S2L = (px, py) => {
-      for (const o of bats) if (!o.bt.dead) { const q = proj(o.pos, tA); if (Math.hypot(px - q[0], py - q[1]) < 62 * U) return { x: S2.laneX(o.bt.lane), y: by - 46 * U }; }
+      for (const o of bats) if (!o.bt.dead) { const q = proj(o.pos, tA); if (Math.hypot(px - q[0], py - q[1]) < 62 * U) { const [bx2, by2] = S2.batPos(o.bt); return { x: bx2, y: by2 }; } }
       if (s.doc && !G.docs[1]) { const q = proj(docG.position, tA); if (Math.hypot(px - q[0], py - q[1]) < 64 * U) return { x: s.doc.x, y: s.doc.y }; }
       const hit = pick(px, py, UP, -wY(), tB); return hit ? { x: W / 2 + hit.x / k, y: by + hit.z / k } : { x: px, y: H * 0.5 };
     };
@@ -2577,7 +2708,7 @@ void main(){ vec3 m0 = vec3(0.0), m1 = vec3(0.0), m2 = vec3(0.0), m3 = vec3(0.0)
       for (const o of bats) { const bt = o.bt, aim = bt.st === 'aim' && !bt.dead; o.gun.visible = !bt.dead; o.gun.rotation.y = aim ? 0 : Math.sin(t * 0.8 + bt.lane) * 0.35; o.bm.emissiveIntensity = aim ? 0.6 + 0.6 * Math.abs(Math.sin(t * 12)) : 0; o.strip.material.opacity = aim ? 0.22 + 0.2 * Math.sin(t * 16) : 0; o.strip.position.y = wy + 0.12; o.strip.visible = aim;
         if (bt.flash > 0) { put(C.pb, o.pos.x, o.pos.y, o.pos.z + 3.6, 9, 255, 220, 150, 1); C.req.push([o.pos.x, o.pos.y + 1, o.pos.z + 3, 3, 0xffc070, 60]); }
         if (bt.dead) { const r = 5 + Math.sin(t * 10 + o.pos.x) * 1; put(C.pb, o.pos.x, o.pos.y, o.pos.z, r, 255, 150, 60, 0.75); C.req.push([o.pos.x, o.pos.y + 2, o.pos.z, 1.6 + Math.sin(t * 13) * 0.4, 0xff8030, 40]); } }
-      boats.forEach((o, i) => { const b = s.boats[i]; if (!b) { o.g.visible = false; return; } o.g.visible = true; const X = LX(b.lane) + (b.st === 'stuck' ? Math.sin(t * 20) * 0.12 : 0), Z = Zw(b.y), gr = gH(X, Z) + 0.2, fl = sea.h(X, Z) - 0.12; o.g.position.set(X, Math.max(gr, fl), Z); o.g.rotation.set(0, b.st === 'back' ? -Math.PI / 2 : Math.PI / 2, b.st === 'stuck' ? 0.07 : Math.sin(t * 2.6 + i) * 0.03); o.g.userData.troops.visible = b.st !== 'back' && b.st !== 'land'; o.w.visible = b.st === 'go' || b.st === 'back'; });
+      boats.forEach((o, i) => { const b = s.boats[i]; if (!b) { o.g.visible = false; return; } o.g.visible = true; const X = LX(b.lane) + (b.st === 'stuck' ? Math.sin(t * 20) * 0.12 : 0), Z = Zw(b.y), gr = gH(X, Z) + 0.33, fl = sea.h(X, Z); o.g.position.set(X, Math.max(gr, fl), Z); o.g.rotation.set(0, b.st === 'back' ? -Math.PI / 2 : Math.PI / 2, b.st === 'stuck' ? 0.07 : Math.sin(t * 2.6 + i) * 0.03); o.g.userData.troops.visible = b.st !== 'back' && b.st !== 'land'; o.w.visible = b.st === 'go' || b.st === 'back'; });
       men.forEach((m, i) => { const d = s.men[i]; if (!d) { m.visible = false; return; } m.visible = true; const X = Xw(d.x), Z = Zw(d.y); m.position.set(X, gH(X, Z) + Math.abs(Math.sin(d.ph + d.life * 18)) * 0.2, Z); m.rotation.y = Math.PI / 2; });
       flags.forEach((o, i) => { o.g.visible = i < G.stat.land; o.f.rotation.y = Math.sin(t * 6 + i) * 0.35; });
       fleet.forEach((o, i) => { o.position.y = sea.h(o.position.x, o.position.z) * 0.5; o.rotation.x = Math.sin(t * 1.1 + i) * 0.02; });
@@ -2586,8 +2717,9 @@ void main(){ vec3 m0 = vec3(0.0), m1 = vec3(0.0), m2 = vec3(0.0), m3 = vec3(0.0)
       const arc = (x0, y0, x1, y1, p, h0, h1, hgt) => { C.L2W(x0, y0, tA); C.L2W(x1, y1, tB); tC.lerpVectors(tA, tB, p); tC.y = h0 + (h1 - h0) * p + Math.sin(p * Math.PI) * hgt; return tC; };
       const shot = (x0, y0, x1, y1, p, h0, h1, hgt, r, g, b) => { const a = V().copy(arc(x0, y0, x1, y1, p, h0, h1, hgt)), bq = V().copy(arc(x0, y0, x1, y1, Math.max(0, p - 0.09), h0, h1, hgt)); put(C.pb, a.x, a.y, a.z, 2.6, 255, 255, 240, 1); trail(C.pb, a, bq, 7, 1.6, r, g, b); };
       for (const q of s.shells) shot(q.x0, q.y0, S2.laneX(q.b.lane), by - 46 * U, 1 - q.t / 0.55, 3.4, 3, 9, 255, 233, 168);
-      for (const v of s.vfx) shot(v.x0, v.y0, v.x1, v.y1, v.t / v.dur, v.rocket ? 22 : 3.4, 2.5, v.rocket ? 0 : v.high ? 30 : 8, 255, v.rocket ? 200 : 225, v.rocket ? 120 : 170);
-      planes.forEach((p, i) => { const d = s.planes[i]; if (!d) { p.visible = false; return; } p.visible = true; p.position.set(Xw(d.x), 22, Zw(d.y)); p.rotation.set(Math.sin(t * 2 + i) * 0.08, Math.PI / 2, 0); });
+      for (const v of s.vfx) { const p = v.t / v.dur; if (v.bomb) shot(v.x0, v.y0, v.x1, v.y1, p, 15, 1.5, 0, 200, 160, 120); else if (v.lsmr) { shot(v.x0, v.y0, v.x1, v.y1, p, 2.2, 2, 16, 255, 185, 110); if (v.t < 0.1) { C.L2W(v.x0, v.y0, tA); put(C.pb, tA.x, 2.6, tA.z, 9, 255, 210, 140, 1 - v.t * 8); } } else if (v.enemy) shot(v.x0, v.y0, v.x1, v.y1, p, 3.5, 0.8, 13, 255, 110, 80); else shot(v.x0, v.y0, v.x1, v.y1, p, v.rocket ? 22 : 3.4, 2.5, v.rocket ? 0 : v.high ? 30 : 8, 255, v.rocket ? 200 : 225, v.rocket ? 120 : 170); }
+      planes.forEach((p, i) => { const d = s.planes[i]; if (!d) { p.visible = false; return; } p.visible = true; p.position.set(Xw(d.x), d.raid ? 15 : 22, Zw(d.y)); p.rotation.set(Math.sin(t * 2 + i) * 0.08, Math.PI / 2, d.raid && d.fired ? 0.25 : 0); });
+      more(t, dt);
       if (s.doc && !G.docs[1]) { C.L2W(s.doc.x, s.doc.y, docG.position); docG.position.y = wy + 1; docG.material.opacity = clamp(Math.min(1, s.doc.t * 2) * Math.min(1, (7 - s.doc.t) * 1.5), 0, 1) * 0.8; } else docG.material.opacity = 0;
       const pt = portrait(), a = W / H;
       cam.fov = pt ? 66 : a < 1.45 ? 58 : 50;
@@ -2598,6 +2730,7 @@ void main(){ vec3 m0 = vec3(0.0), m1 = vec3(0.0), m2 = vec3(0.0), m3 = vec3(0.0)
       q = proj(tA.set(-HW * 0.62, 3, -2), tB); mtext('그린 비치', q[0], q[1], 15, '#9dffb8');
       const wy = wY(), sz = shoreZ(wy);
       if (sz > 12) { q = proj(tA.set(HW * 0.3, 0.5, sz * 0.5), tB); mtext('썰물에 드러난 갯벌 — 상륙정이 지날 수 없어요', q[0], q[1], 15, 'rgba(255,240,215,.92)'); }
+      { const n = s.bats.filter(b => !b.dead).length; q = proj(tA.set(-HW * 0.5, 12, -34), tB); mtext('남은 해안포 ' + n + ' / ' + s.bats.length, q[0], q[1] + 24 * U, 14, n ? '#ffb4a8' : '#9dffb8'); if (surrG().visible) { q = proj(tA.copy(surrG().position).setY(surrG().position.y + 3.6), tB); mtext('투항하는 북한군', q[0], q[1], 13, '#ffffff'); } if (flagG().visible) { q = proj(tA.copy(flagG().position).setY(flagG().position.y + 13), tB); mtext('06:50 정상 점령', q[0], q[1], 13, '#ffe9a0'); } }
       for (const o of bats) { if (o.bt.dead) continue; q = proj(tA.copy(o.pos).setY(o.pos.y + 2.2), tB); mtext('해안포', q[0], q[1], 13, '#ffd0c8');
         if (o.bt.st === 'aim') { const c = proj(o.pos, tB); ctx.strokeStyle = 'rgba(255,90,70,.95)'; ctx.lineWidth = 3 * U; ctx.beginPath(); ctx.arc(c[0], c[1], (30 + Math.sin(t * 12) * 4) * U, 0, TAU); ctx.stroke(); mtext('! 눌러서 함포 지원', q[0], q[1] - 20 * U, 17, '#ff6a5a'); } }
       s.boats.forEach((b, i) => { if (b.st !== 'stuck') return; q = proj(tA.copy(boats[i].g.position).setY(boats[i].g.position.y + 3), tB); mtext('!', q[0], q[1], 24, '#ffd36b'); });
@@ -2633,9 +2766,9 @@ void main(){ vec3 m0 = vec3(0.0), m1 = vec3(0.0), m2 = vec3(0.0), m3 = vec3(0.0)
     const fires = [0.22, 0.55, 0.86].map(px => { const lx = wx + (W - wx) * px; return V(X(lx), topY + 4, zOf(lx)); });
     const wallMen = []; for (let i = 0; i < 16; i++) { const m = soldier(0x2f3b28); m.scale.setScalar(1.5); m.position.set(3.2 + (i % 2) * 1.6, topY, 9 - i * 2.9); m.rotation.y = Math.PI * (0.1 + hash(i) * 0.3); m.visible = false; sc.add(m); wallMen.push(m); }
     // 상륙정 (가운데가 조종하는 배, 뒤쪽 두 척은 함께 오르는 다른 부대)
-    const mkBoat = () => { const g = lcvp(); g.scale.setScalar(4); const l = ladder(); l.visible = false; sc.add(g, l); const cl = [0, 1, 2, 3].map(() => { const m = soldier(0x2f3b28); m.scale.setScalar(1.5); m.visible = false; sc.add(m); return m; }); return { g, l, cl }; };
+    const HS = 4.8, mkBoat = () => { const g = lcvp(); g.scale.setScalar(HS); const l = ladder(); l.visible = false; sc.add(g, l); const cl = [0, 1, 2, 3].map(() => { const m = soldier(0x2f3b28); m.scale.setScalar(1.5); m.visible = false; sc.add(m); return m; }); return { g, l, cl }; };
     const main = mkBoat(), deco = [mkBoat(), mkBoat()];
-    const stow = ladder(); stow.scale.set(1, 3.4, 0.4); stow.position.set(1.2, 0.8, 0.3); stow.rotation.z = -0.5; main.g.add(stow);
+    const stow = ladder(); stow.scale.set(0.5, 3.0, 0.3); stow.position.set(-0.5, 0.12, 0.2); stow.rotation.z = -1.25; main.g.add(stow);
     const fleet = FLEETX.map((f, i) => { const o = ship(3.4); o.position.set(-560 + f * 640, 0, -520 - i * 60 - f * 260); o.rotation.y = 0.4 + hash(i + 5) * 0.5; o.traverse(m => { if (m.isMesh && m.material.color) { m.material = m.material.clone(); m.material.color.multiplyScalar(0.55); } }); sc.add(o); return o; });
     const docG = spr(0xffe08a, 12, 0); sc.add(docG);
     const setLadder = (o, x0, y0, z0, x1, y1) => { const dx = x1 - x0, dy = y1 - y0, len = Math.hypot(dx, dy); o.position.set(x0, y0, z0); o.scale.set(1.6, len, 1.3); o.rotation.z = -Math.atan2(dx, dy); return len; };
@@ -2645,16 +2778,18 @@ void main(){ vec3 m0 = vec3(0.0), m1 = vec3(0.0), m2 = vec3(0.0), m3 = vec3(0.0)
     let lookY = topY * 0.6;
     C.update = (t, dt) => {
       const L = S3.tide(), seaY = tideY(L);
-      sea.tick(t, -40, -70, seaY);
+      sea.swell(X(wx - 4 * U) - 12, 0, 44 * U * k, G.time, 0.031, 0.0095); sea.tick(t, -20, -40, seaY);
+      const ride = (o, cx, cz, calm) => { const y = sea.sw(cx, cz), sx = (sea.sw(cx + 6, cz) - sea.sw(cx - 6, cz)) / 12, sz = (sea.sw(cx, cz + 3) - sea.sw(cx, cz - 3)) / 6; o.position.set(cx, y, cz); o.rotation.set(-Math.atan(sz) * 0.4 + Math.sin(t * 1.9 + cz) * 0.012 * calm, 0, Math.atan(sx) * 0.3 + Math.sin(t * 2.3 + cz) * 0.01 * calm); return y + 0.06 * HS; };
       let off = 0; if (s.st === 'arrive') off = -s.stT / 0.8 * W * 0.5; if (s.st === 'leave') off = -(1 - s.stT / 0.5) * W * 0.5;
       const deck = s.st === 'climb' ? s.deckY : S3.deck(), bowX = X(wx - 4 * U + off), dY = Y(deck);
-      main.g.position.set(bowX - 10.2, dY - 5.0, 0); main.g.rotation.set(Math.sin(t * 1.9) * 0.03, 0, s.st === 'climb' ? 0 : Math.sin(t * 2.3) * 0.025);
+      const cxm = bowX - 12, fY = ride(main.g, cxm, 0, s.st === 'climb' ? 0 : 1), hb = [[cxm - 0.6, 0, 11.4, 3.84]];
       main.g.userData.troops.visible = s.st !== 'climb'; stow.visible = s.st !== 'climb';
-      if (s.st === 'climb') { const x0 = X(wx - 30 * U + off), y0 = dY + 0.4, len = setLadder(main.l, x0, y0, 0, 0.6, topY + 0.6); main.l.visible = true;
+      if (s.st === 'climb') { const x0 = X(wx - 30 * U + off), y0 = fY, len = setLadder(main.l, x0, y0, 0, 0.6, topY + 0.6); main.l.visible = true;
         main.cl.forEach((m, i) => { const p = clamp(s.climbT * 1.1 - i * 0.22, 0, 1.05); m.visible = p > 0 && p < 1.05; const q = Math.min(p, 1); m.position.set(x0 + (0.6 - x0) * q - 0.5, y0 + (topY + 0.6 - y0) * q - 0.6, 0); m.rotation.set(0, 0, -0.25 + Math.sin(s.climbT * 20 + i) * 0.1); }); }
       else { main.l.visible = false; main.cl.forEach(m => m.visible = false); }
-      deco.forEach((o, i) => { const z = -62 - i * 58, ph = t + 2.3 + i * 1.7, y = seaY + S3.bob(ph) * k * 0.8 + 1.6; o.g.position.set(-10.6, y - 5, z); o.g.rotation.x = Math.sin(ph * 1.7) * 0.03; setLadder(o.l, -2.6, y + 0.4, z, 0.6, topY + 0.6); o.l.visible = true; o.g.userData.troops.visible = true;
-        o.cl.forEach((m, j) => { const q = mod(t * 0.38 + j * 0.25 + i * 0.4, 1); m.visible = true; m.position.set(-2.6 + 3.2 * q - 0.5, y + 0.4 + (topY + 0.2 - y) * q - 0.6, z); m.rotation.z = -0.25 + Math.sin(t * 9 + j) * 0.1; }); });
+      deco.forEach((o, i) => { const z = -62 - i * 58, y = ride(o.g, -12.5, z, 1); hb.push([-13.1, z, 11.4, 3.84]); setLadder(o.l, -2.6, y, z, 0.6, topY + 0.6); o.l.visible = true; o.g.userData.troops.visible = true;
+        o.cl.forEach((m, j) => { const q = mod(t * 0.38 + j * 0.25 + i * 0.4, 1); m.visible = true; m.position.set(-2.6 + 3.2 * q - 0.5, y + (topY + 0.2 - y) * q - 0.6, z); m.rotation.z = -0.25 + Math.sin(t * 9 + j) * 0.1; }); });
+      sea.hulls(hb);
       wallMen.forEach((m, i) => { m.visible = i < Math.min(16, G.stat.ladder * 3); });
       fleet.forEach((o, i) => { o.position.y = sea.h(o.position.x, o.position.z) * 0.4; if (s.fl[i] > 0) { const a = s.fl[i] / 0.45; put(C.pb, o.position.x + 14, 9, o.position.z, 90 * a, 255, 220, 160, 0.9); put(C.pb, o.position.x + 14, 9, o.position.z, 34 * a, 255, 255, 235, 1); } });
       fires.forEach((f, i) => { const r = 16 + Math.sin(t * 5 + i * 9) * 2.5; put(C.pb, f.x, f.y, f.z, r, 255, 140, 60, 0.6); C.req.push([f.x, f.y + 5, f.z, 1.3 + Math.sin(t * 11 + i) * 0.3, 0xff8040, 90]); });
@@ -2826,6 +2961,7 @@ void main(){ vec3 m0 = vec3(0.0), m1 = vec3(0.0), m2 = vec3(0.0), m3 = vec3(0.0)
     frame, get cur() { return cur; }, get low() { return lowQ; }, get pr() { return pr; },
     ovl(t) { if (!cur) return; if (!cur.isMap) { cur.ovl(t); fx2d(t); } else cur.ovl(t); },
     S2L(px, py) { return cur && !cur.isMap && cur.S2L ? cur.S2L(px, py) : { x: px, y: py }; },
+    batS(i) { return cur && cur.bpos ? proj(cur.bpos[i], tB).slice(0, 2) : null; },
     L2S(x, y) { if (!cur || cur.isMap) return [x, y]; const w = cur.L2W(x, y, tA); return proj(w, tB); },
   };
 })();
@@ -3142,6 +3278,7 @@ const AI = {
       const s = G.s2;
       if (s.doc && !G.docs[1] && s.doc.t > 1) { S2.down({ x: s.doc.x, y: s.doc.y }); return; }
       for (const bt of s.bats) if (!bt.dead && bt.st === 'aim' && bt.tm < 1.0) S2.strike(bt);
+      if (s.bats.filter(b => !b.dead && b.st === 'aim').length >= 2 && s.air.cd <= 0) S2.act();
       if (S2.tide() >= 7.3 && this.cd <= 0) { this.cd = 0.42; S2.launch(G.stat.land % 3 === 0 ? (Math.random() * 3 | 0) : (s.boats.length % 3)); }
     } else {
       const s = G.s3;
